@@ -17,6 +17,8 @@
 #define LED PIN_015 
 #define LED_RED LED
 
+#define EXT_LOW_PIN PIN_013
+
 #define ENABLE_ACTIVITY_LED 1
 #define ENABLE_DEBUG_OUTPUT 1
 
@@ -136,7 +138,13 @@ void setup()
     pinMode( button_map[i], INPUT_PULLUP );
   }
 
-  
+  if (ENABLE_ACTIVITY_LED) {
+    pinMode(LED, OUTPUT);  //Set the LED to output mode.
+  }
+
+  pinMode(EXT_LOW_PIN, OUTPUT); 
+  digitalWrite(EXT_LOW_PIN, LOW); // turn off external LDO to save power 
+
   // Get MAC address and create unique name
   uint8_t mac[6];
   Bluefruit.getAddr(mac);
@@ -172,17 +180,12 @@ void setup()
 
   // Set up and start advertising
   startAdv();
-  if (ENABLE_ACTIVITY_LED) {
-    pinMode(LED, OUTPUT); //Set the LED to output mode.
-    digitalWrite(LED, HIGH);  // Turn on LED
-  }
 
   lastActivityTime = millis();  // initialize activity timer
 }
 
 void loop() 
 {
-
   for ( uint8_t i=0; i<NUM_BUTTONS; i++ ) {
 
     bool pressed = ( digitalRead( button_map[i] ) == LOW );
@@ -218,7 +221,14 @@ void loop()
   // Check for sleep timeout
   if (millis() - lastActivityTime  > SLEEP_TIMEOUT_MS) enterSleepMode();
   
-  delay(20);  // main loop polling @50Hz
+  if (ENABLE_ACTIVITY_LED) {
+    static int ledCount=0;
+    ledCount++;
+    if (ledCount==50) digitalWrite(LED, HIGH);
+    else if (ledCount==55) digitalWrite(LED, LOW);
+    else if (ledCount>60) ledCount=0;
+  }
 
+  delay(20);  // main loop polling @50Hz
 }
 
