@@ -22,7 +22,7 @@ After an adjustable time of user inactivity (constant `SLEEP_TIMEOUT_MS`), the n
 A wakeup can be triggered by pressing any of the configured buttons. This will cause a system reset. BLE connection to a paired host is usually re-established in 1-3 seconds. 
 
 ## Suggested hardware setup
-In the `hw` folder, STL files for a 3D-printed enclosure are provided for housing the microcontroller PCB, one  [https://de.aliexpress.com/item/1005008563113806.html](12 x 12 x 10 mm tactile pushbutton) and a [170mA LiPo battery](https://www.pollin.de/p/lithium-polymer-akku-hwe601525-3-7-v-170-mah-5-stueck-273699). Using this setup, a BLE switch can be made for less than 10 € material cost!
+In the `hw` folder, STL files for a 3D-printed enclosure are provided for housing the microcontroller PCB, one [https://de.aliexpress.com/item/1005008563113806.html](tactile pushbutton 12x12x10 mm) and a [170mA LiPo battery](https://www.pollin.de/p/lithium-polymer-akku-hwe601525-3-7-v-170-mah-5-stueck-273699). Using this setup, a BLE switch can be made for less than 10 € material cost!
 
 ![parts and size comparison](img/Bleeny_parts1.jpg)
 ![parts mounted in base](img/Bleeny_parts2.jpg)
