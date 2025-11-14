@@ -28,4 +28,5 @@ In the `hw` folder, STL files for a 3D-printed enclosure are provided for housin
 ![parts mounted in base](img/Bleeny_parts2.jpg)
 ![assembled Bleeny Button](img/BleenyButton.jpg)
  
- 
+ # Acknowledgement
+This work has been accomplished at the UAS Technikum Wien in course of the R&D-project [InDiKo](https://www.technikum-wien.at/en/research-projects/indiko/) (MA23 project 38-09), which is supported by the [City of Vienna](https://www.wien.gv.at/kontakte/ma23/index.html).
