@@ -20,10 +20,10 @@
 #define EXT_LOW_PIN PIN_013
 
 #define ENABLE_ACTIVITY_LED 1
-#define ENABLE_DEBUG_OUTPUT 1
+#define ENABLE_DEBUG_OUTPUT 0  // set to 1 to enable serial debug output; note that in this case serial must be connected to start operation
 
 // sleep configuration
-#define SLEEP_TIMEOUT_MS 10000  // Sleep after 10 seconds of inactivity
+#define SLEEP_TIMEOUT_MS 180000  // Sleep after 180 seconds of inactivity
 unsigned long lastActivityTime = 0;
 bool sleepMode = false;
 
@@ -101,7 +101,7 @@ void startAdv(void)
   Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
   Bluefruit.Advertising.addTxPower();
   Bluefruit.Advertising.addAppearance(BLE_APPEARANCE_HID_KEYBOARD);
-  
+
   // Include BLE HID service
   Bluefruit.Advertising.addService(blehid);
 
@@ -120,7 +120,17 @@ void startAdv(void)
   Bluefruit.Advertising.restartOnDisconnect(true);
   Bluefruit.Advertising.setInterval(32, 244);    // in unit of 0.625 ms
   Bluefruit.Advertising.setFastTimeout(30);      // number of seconds in fast mode
-  Bluefruit.Advertising.start(0);                // 0 = Don't stop advertising after n seconds
+  if (!Bluefruit.Advertising.start(0)) {          // 0 = Don't stop advertising after n seconds
+    if (ENABLE_DEBUG_OUTPUT) Serial.println("ERROR: Failed to start advertising!");
+  } else {
+    if (ENABLE_DEBUG_OUTPUT) {
+      char name_buffer[64];
+      if (Bluefruit.getName(name_buffer, sizeof(name_buffer)) > 0) {
+        Serial.print("Advertising as: ");
+        Serial.println(name_buffer);
+      }    
+    }
+  }
 }
 
 
@@ -130,7 +140,7 @@ void setup()
     Serial.begin(115200);  // note: the USB CDC serial port is not only useful for debugging
                          // but also for resetting the nRF52 when uploading code via the bootloader
 
-    // while ( !Serial ) delay(10);   // wait until Serial is connected 
+    while ( !Serial ) delay(10);   // wait until Serial is connected 
     Serial.println("Tenstar nRF52840 BLE Keyboard Demo ready!");
   }
 
@@ -144,23 +154,25 @@ void setup()
 
   pinMode(EXT_LOW_PIN, OUTPUT); 
   digitalWrite(EXT_LOW_PIN, LOW); // turn off external LDO to save power 
+ 
+  if (!Bluefruit.begin()) {
+    if (ENABLE_DEBUG_OUTPUT) Serial.println("ERROR: Failed to initialize Bluefruit!");
+    while(1);
+  }
 
-  // Get MAC address and create unique name
+  Bluefruit.setTxPower(4);    
+  // Bluefruit.Periph.clearBonds();  // Clear all bonding data  Check bluefruit.h for supported values
+
+  // Get MAC address and create unique advertising name
   uint8_t mac[6];
   Bluefruit.getAddr(mac);
-  
-  // Create name with last 4 hex digits of MAC
-  String deviceName = "AstericsHID";
-  deviceName += String(mac[4], HEX);
-  deviceName += String(mac[5], HEX);
-  
-  Bluefruit.setName(deviceName.c_str());
-  Bluefruit.begin();
-  Bluefruit.setTxPower(4);    // Check bluefruit.h for supported values
+  char name_buffer[64]={0};
+  sprintf (name_buffer, "Bleeny-%02X%02X", mac[4], mac[5]);
+  Bluefruit.setName(name_buffer);
 
   // Configure and Start Device Information Service
-  bledis.setManufacturer("Tenstar");
-  bledis.setModel("nrf52840 devboard");
+  bledis.setManufacturer("Asterics Foundation");
+  bledis.setModel("BleenyButton");
   bledis.begin();
 
   /* Start BLE HID
@@ -200,6 +212,7 @@ void loop()
         addActiveKey(kc);
         blehid.keyboardReport(modifiers, active_keys);
         // if (ENABLE_ACTIVITY_LED ) digitalToggle(LED);
+        if (ENABLE_DEBUG_OUTPUT) Serial.println("Button pressed");
       }
     } else if ( !pressed && (buttonStates & (1 << i)) ) {
       // button just released
@@ -212,6 +225,7 @@ void loop()
         if (mod && mod == KEYBOARD_MODIFIER_LEFT_SHIFT) modifiers &= ~KEYBOARD_MODIFIER_LEFT_SHIFT;
         blehid.keyboardReport(modifiers, active_keys);
         //if (ENABLE_ACTIVITY_LED ) digitalToggle(LED);
+        if (ENABLE_DEBUG_OUTPUT) Serial.println("Button released");
       }
     }
   }
