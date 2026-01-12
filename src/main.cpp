@@ -15,6 +15,9 @@
 
 // Note: P0.15 is connected to the built-in red led
 #define LED PIN_015 
+#ifdef LED_RED
+  #undef LED_RED
+#endif
 #define LED_RED LED
 
 #define EXT_LOW_PIN PIN_013
@@ -28,9 +31,9 @@ unsigned long lastActivityTime = 0;
 bool sleepMode = false;
 
 // define ASCII-key action for each button
-#define NUM_BUTTONS 5
-uint8_t button_map[NUM_BUTTONS] = {PIN_017, PIN_020, PIN_022, PIN_024, PIN_100};
-uint8_t key_map[NUM_BUTTONS] = {' ', '\n', '1', '2', '3'};
+#define NUM_BUTTONS 4
+uint8_t button_map[NUM_BUTTONS] = {PIN_017, PIN_020, PIN_022, PIN_024};
+uint8_t key_map[NUM_BUTTONS] = {' ', '\n', '1'};
 uint8_t buttonStates = 0;
 
 // Multi-key state (up to 6 simultaneous keys + modifiers)
@@ -141,7 +144,7 @@ void setup()
                          // but also for resetting the nRF52 when uploading code via the bootloader
 
     while ( !Serial ) delay(10);   // wait until Serial is connected 
-    Serial.println("Tenstar nRF52840 BLE Keyboard Demo ready!");
+    Serial.println("BleenyButton by AsTeRICS Foundation / Assistronik ready");
   }
 
   for ( uint8_t i=0; i<NUM_BUTTONS; i++ ) {
@@ -171,7 +174,7 @@ void setup()
   Bluefruit.setName(name_buffer);
 
   // Configure and Start Device Information Service
-  bledis.setManufacturer("Asterics Foundation");
+  bledis.setManufacturer("AsTeRICS Foundation / Assistronik");
   bledis.setModel("BleenyButton");
   bledis.begin();
 
