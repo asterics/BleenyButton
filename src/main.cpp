@@ -11,7 +11,9 @@
 
 
 #include <Arduino.h>
-#include <bluefruit.h> 
+#include <bluefruit.h>
+#include "Adafruit_LittleFS.h"
+#include "InternalFileSystem.h"
 
 // Note: P0.15 is connected to the built-in red led
 #define LED PIN_015 
@@ -26,14 +28,16 @@
 #define ENABLE_DEBUG_OUTPUT 0  // set to 1 to enable serial debug output; note that in this case serial must be connected to start operation
 
 // sleep configuration
-#define SLEEP_TIMEOUT_MS 180000  // Sleep after 180 seconds of inactivity
+uint sleep_timeout_ms = 180000;  // Sleep after 180 seconds of inactivity
 unsigned long lastActivityTime = 0;
 bool sleepMode = false;
 
 // define ASCII-key action for each button
 #define NUM_BUTTONS 4
 uint8_t button_map[NUM_BUTTONS] = {PIN_017, PIN_020, PIN_022, PIN_024};
-uint8_t key_map[NUM_BUTTONS] = {' ', '\n', '1'};
+// because we access the pins via Arduino/Adafruit (digitalRead) and nRF52840 (NRF_GPIO->PIN_CNF), we need 2 different definitions here.
+uint8_t button_map_wakeup[NUM_BUTTONS] = {17, 20, 22, 24};
+uint8_t key_map[NUM_BUTTONS] = {' ', '\n', '1', '2'};
 uint8_t buttonStates = 0;
 
 // Multi-key state (up to 6 simultaneous keys + modifiers)
@@ -47,16 +51,22 @@ static uint8_t modifiers = 0; // e.g. KEYBOARD_MODIFIER_LEFT_SHIFT
 
 BLEDis bledis;
 BLEHidAdafruit blehid;
-
+//settings handling and parser at the end of the file
+void loadSettings();
+bool storeSettings();
+using namespace Adafruit_LittleFS_Namespace;
+File file(InternalFS);
+void parseCommand(char *buf);
+#define MAX_PARAM_LEN 32
 
 void enterSleepMode() {
-  if (ENABLE_DEBUG_OUTPUT) Serial.println("Entering sleep mode...");
+  if (ENABLE_DEBUG_OUTPUT) { Serial.println("Entering sleep mode..."); delay(50); } /*delay in debug is necessary to still print out via USB.*/
   sleepMode = true;
   
   // Configure all button pins as wakeup sources with pullup
   for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
     // Set pin as wake source (low level trigger)
-    NRF_GPIO->PIN_CNF[button_map[i]] = (GPIO_PIN_CNF_SENSE_Low << GPIO_PIN_CNF_SENSE_Pos) |
+    NRF_GPIO->PIN_CNF[button_map_wakeup[i]] = (GPIO_PIN_CNF_SENSE_Low << GPIO_PIN_CNF_SENSE_Pos) |
                                        (GPIO_PIN_CNF_DRIVE_S0S1 << GPIO_PIN_CNF_DRIVE_Pos) |
                                        (GPIO_PIN_CNF_PULL_Pullup << GPIO_PIN_CNF_PULL_Pos) |
                                        (GPIO_PIN_CNF_INPUT_Connect << GPIO_PIN_CNF_INPUT_Pos) |
@@ -156,7 +166,10 @@ void setup()
   }
 
   pinMode(EXT_LOW_PIN, OUTPUT); 
-  digitalWrite(EXT_LOW_PIN, LOW); // turn off external LDO to save power 
+  digitalWrite(EXT_LOW_PIN, LOW); // turn off external LDO to save power
+
+  loadSettings();
+
  
   if (!Bluefruit.begin()) {
     if (ENABLE_DEBUG_OUTPUT) Serial.println("ERROR: Failed to initialize Bluefruit!");
@@ -164,7 +177,6 @@ void setup()
   }
 
   Bluefruit.setTxPower(4);    
-  // Bluefruit.Periph.clearBonds();  // Clear all bonding data  Check bluefruit.h for supported values
 
   // Get MAC address and create unique advertising name
   uint8_t mac[6];
@@ -201,6 +213,9 @@ void setup()
 
 void loop() 
 {
+  static char serialbuffer[MAX_PARAM_LEN];
+  static int offset = 0;
+
   for ( uint8_t i=0; i<NUM_BUTTONS; i++ ) {
 
     bool pressed = ( digitalRead( button_map[i] ) == LOW );
@@ -233,19 +248,120 @@ void loop()
     }
   }
 
-  //  __WFI(); // wait for interrupt - safe power until a button is pressed/released - did not work as expected here
+  //read one line from serial
+  while(Serial.available()) {
+    serialbuffer[offset] = Serial.read();
+    if(serialbuffer[offset] == '\n') {
+      parseCommand(serialbuffer);
+      offset = 0;
+      memclr(serialbuffer,sizeof(serialbuffer));
+    } else {
+      offset++;
+      if(offset == MAX_PARAM_LEN) {
+        Serial.println("Too long");
+        offset = 0;
+      }
+    }
+  }
 
   // Check for sleep timeout
-  if (millis() - lastActivityTime  > SLEEP_TIMEOUT_MS) enterSleepMode();
+  if (millis() - lastActivityTime  > sleep_timeout_ms) enterSleepMode();
   
   if (ENABLE_ACTIVITY_LED) {
     static int ledCount=0;
     ledCount++;
-    if (ledCount==50) digitalWrite(LED, HIGH);
-    else if (ledCount==55) digitalWrite(LED, LOW);
-    else if (ledCount>60) ledCount=0;
+    if (ledCount==100) digitalWrite(LED, HIGH);
+    else if (ledCount==105) digitalWrite(LED, LOW);
+    else if (ledCount>110) ledCount=0;
   }
 
   delay(20);  // main loop polling @50Hz
 }
 
+
+bool storeSettings() {
+  InternalFS.remove("settings.txt");
+  file.open("settings.txt", FILE_O_WRITE);
+  //currently only one setting, activity timeout
+  char buffer[MAX_PARAM_LEN] = {0};
+  snprintf(buffer,MAX_PARAM_LEN,"i:%d\n",sleep_timeout_ms);
+  file.write(buffer);
+
+  file.close();
+  return true;
+}
+
+void loadSettings() {
+  char buffer[MAX_PARAM_LEN] = {0};
+  uint totalRead = 0;
+  bool readSuccess = false;
+  InternalFS.begin();
+  file.open("settings.txt", FILE_O_READ);
+  if(file) {
+    do {
+      //repeat until one line is found  (\n); always reserve the last \0.
+      for(int i = 0; i<(MAX_PARAM_LEN-1); i++) {
+        if(file.read(buffer+i,1)) {
+          readSuccess = true;
+          totalRead++;
+        } else {
+          readSuccess = false;
+          break;
+        }
+
+        if(buffer[i] == '\n') {
+          break;
+        }
+      }
+      if(ENABLE_DEBUG_OUTPUT) { Serial.println("Found setting: "); Serial.print(buffer);}
+      //send command to parser
+      parseCommand(buffer);
+    } while(readSuccess || totalRead < file.size());
+    file.close();
+  } else {
+    if(ENABLE_DEBUG_OUTPUT) Serial.println("Settings not found");
+  }
+}
+
+void parseCommand(char *buf) {
+  uint newValue = 0;
+
+  //very very simple, check first character.
+  //should be sufficient for this device
+  switch(buf[0]) {
+    //?: help with supported commands
+    default:
+      Serial.println("Unknown command, use:");
+    case '?':
+      // id string
+      Serial.print("Bleeny - "); Serial.println(__DATE__);
+      Serial.println("i:<int>:Inactivity time [ms]:10000-600000");
+      Serial.println("r:<none>:Reset paired devices");
+      Serial.println("s:<none>:Store new settings on the device");
+      Serial.println("?:<none>:Print out supported commands and build date");
+      //examples for more commands (+types)
+      //Serial.println("b:<bool>:Enable Bluetooth");
+      //Serial.println("m:<enum>:Operating mode:auto,manual,test");
+      //Serial.println("n:<string>:Device name:1-32");
+      //Serial.println("f:<float>:Temperature offset:-10.0-10.0");
+    break;
+    //i: set the inactivity time to poweroff the uC
+    case 'i':
+      Serial.print("Prev: "); Serial.println(sleep_timeout_ms);
+      newValue = String(buf+2).toInt();
+      if(newValue >= 10000 && newValue <= 600000) sleep_timeout_ms = newValue;
+      Serial.print("New: "); Serial.println(sleep_timeout_ms);
+    break;
+
+    case 's':
+      if(storeSettings()) Serial.println("OK");
+      else Serial.println("NOK");
+    break;
+
+    case 'r':
+      //reset the BLE pairings
+      Bluefruit.Periph.clearBonds();
+      Serial.println("OK");
+    break;
+  }
+}
