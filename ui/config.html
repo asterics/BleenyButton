@@ -183,7 +183,8 @@ function parseResponse(lines) {
             cmd: parts[0],
             type: parts[1].replace(/[<>]/g, ""),
             description: parts[2],
-            extra: parts[3] || null
+            extra: parts[3] || null,
+            current: parts[4] || null
         });
     });
 }
@@ -217,6 +218,7 @@ function renderUI() {
                 el = document.createElement("input");
                 el.type = "number";
                 applyRange(el, p.extra);
+                if(p.current) el.value = p.current;
                 btn.addEventListener("click", () => sendValue(p.cmd, el.value));
                 break;
 
@@ -225,12 +227,14 @@ function renderUI() {
                 el.type = "number";
                 el.step = "any";
                 applyRange(el, p.extra);
+                if(p.current) el.value = p.current;
                 btn.addEventListener("click", () => sendValue(p.cmd, el.value));
                 break;
 
             case "bool":
                 el = document.createElement("input");
                 el.type = "checkbox";
+                if(p.current) el.checked = 1;
                 btn.addEventListener("click", () => sendValue(p.cmd, el.checked ? 1 : 0));
                 break;
 
@@ -242,12 +246,14 @@ function renderUI() {
                     opt.textContent = v;
                     el.appendChild(opt);
                 });
+                if(p.current) el.value = p.current;
                 btn.addEventListener("click", () => sendValue(p.cmd, el.value));
                 break;
 
             case "string":
                 el = document.createElement("input");
                 el.type = "text";
+                if(p.current) el.value = p.current;
                 btn.addEventListener("click", () => sendValue(p.cmd, el.value));
                 break;
 

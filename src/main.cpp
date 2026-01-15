@@ -335,7 +335,7 @@ void parseCommand(char *buf) {
     case '?':
       // id string
       Serial.print("Bleeny - "); Serial.println(__DATE__);
-      Serial.println("i:<int>:Inactivity time [ms]:10000-600000");
+      Serial.print("i:<int>:Inactivity time [ms]:10000-600000:"); Serial.println(sleep_timeout_ms);
       Serial.println("r:<none>:Reset paired devices");
       Serial.println("s:<none>:Store new settings on the device");
       Serial.println("?:<none>:Print out supported commands and build date");
