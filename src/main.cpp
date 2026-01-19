@@ -25,7 +25,8 @@
 #define EXT_LOW_PIN PIN_013
 
 #define ENABLE_ACTIVITY_LED 1
-#define ENABLE_DEBUG_OUTPUT 0  // set to 1 to enable serial debug output; note that in this case serial must be connected to start operation
+#define ENABLE_DEBUG_OUTPUT 1  // set to 1 to enable serial debug output; 
+#define STARTUP_WAIT_SERIAL 0  // wait for Serial to be connected on startup. Note: this applies after wakeups too!
 
 // sleep configuration
 uint sleep_timeout_ms = 180000;  // Sleep after 180 seconds of inactivity
@@ -58,6 +59,21 @@ using namespace Adafruit_LittleFS_Namespace;
 File file(InternalFS);
 void parseCommand(char *buf);
 #define MAX_PARAM_LEN 32
+
+/******* output to 3.5mm jackplug ******/
+//use output functions ('c' command)
+#define OUTPUT_ACTIVE
+//latching 1 coil relay on P0.02 (D18) & P0.29 (D20)
+uint8_t pin_out[2] = {18,20};
+//different modes for the output
+int mode = 0; 
+// how many modes are used
+#define MODE_MAX 3
+//D21 -> P0.31 for the mode switch button
+uint8_t pin_mode = 21; 
+//f-prototypes to control the output
+void click();
+void output(bool on);
 
 void enterSleepMode() {
   if (ENABLE_DEBUG_OUTPUT) { Serial.println("Entering sleep mode..."); delay(50); } /*delay in debug is necessary to still print out via USB.*/
@@ -152,8 +168,9 @@ void setup()
   if (ENABLE_DEBUG_OUTPUT) {
     Serial.begin(115200);  // note: the USB CDC serial port is not only useful for debugging
                          // but also for resetting the nRF52 when uploading code via the bootloader
-
-    while ( !Serial ) delay(10);   // wait until Serial is connected 
+    if(STARTUP_WAIT_SERIAL) {
+      while ( !Serial ) delay(10);   // wait until Serial is connected 
+    }
     Serial.println("BleenyButton by AsTeRICS Foundation / Assistronik ready");
   }
 
@@ -166,7 +183,15 @@ void setup()
   }
 
   pinMode(EXT_LOW_PIN, OUTPUT); 
+  //OUTPUT_H0H1 //high drive sink & source
   digitalWrite(EXT_LOW_PIN, LOW); // turn off external LDO to save power
+
+  //if output is active, activate GPIOs in high drive mode
+  #ifdef OUTPUT_ACTIVE
+  pinMode(pin_out[0], OUTPUT_H0H1);
+  pinMode(pin_out[1], OUTPUT_H0H1);
+  pinMode(pin_mode, INPUT_PULLUP);
+  #endif
 
   loadSettings();
 
@@ -264,6 +289,19 @@ void loop()
     }
   }
 
+  //if enabled, check the mode switch button for the output
+  #ifdef OUTPUT_ACTIVE
+  if(digitalRead(pin_mode) == false) {
+    delay(10);
+    mode ++;
+    if(mode == MODE_MAX) mode = 0;
+
+    if(ENABLE_DEBUG_OUTPUT) { Serial.print("Mode: "); Serial.println(mode); }
+
+    while(digitalRead(pin_mode) == false);
+  }
+  #endif
+
   // Check for sleep timeout
   if (millis() - lastActivityTime  > sleep_timeout_ms) enterSleepMode();
   
@@ -338,6 +376,9 @@ void parseCommand(char *buf) {
       Serial.print("i:<int>:Inactivity time [ms]:10000-600000:"); Serial.println(sleep_timeout_ms);
       Serial.println("r:<none>:Reset paired devices");
       Serial.println("s:<none>:Store new settings on the device");
+      #ifdef OUTPUT_ACTIVE
+      Serial.println("c:<none>:Click the output");
+      #endif
       Serial.println("?:<none>:Print out supported commands and build date");
       //examples for more commands (+types)
       //Serial.println("b:<bool>:Enable Bluetooth");
@@ -353,6 +394,13 @@ void parseCommand(char *buf) {
       Serial.print("New: "); Serial.println(sleep_timeout_ms);
     break;
 
+    #ifdef OUTPUT_ACTIVE
+    case 'c':
+      click();
+      Serial.println("OK");
+    break;
+    #endif
+
     case 's':
       if(storeSettings()) Serial.println("OK");
       else Serial.println("NOK");
@@ -365,3 +413,22 @@ void parseCommand(char *buf) {
     break;
   }
 }
+
+#ifdef OUTPUT_ACTIVE
+void click() {
+  output(true);
+  delay(100);
+  output(false);
+}
+
+void output(bool on) {
+  digitalWrite(pin_out[0], on);
+  digitalWrite(pin_out[1], !on);
+
+  //2ms settle time
+  delay(2);
+
+  digitalWrite(pin_out[0], false);
+  digitalWrite(pin_out[1], false);
+}
+#endif
