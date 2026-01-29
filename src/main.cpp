@@ -63,17 +63,23 @@ void parseCommand(char *buf);
 /******* output to 3.5mm jackplug ******/
 //use output functions ('c' command)
 #define OUTPUT_ACTIVE
-//latching 1 coil relay on P0.02 (D18) & P0.29 (D20)
-uint8_t pin_out[2] = {18,20};
-//different modes for the output
-int mode = 0; 
-// how many modes are used
-#define MODE_MAX 3
-//D21 -> P0.31 for the mode switch button
-uint8_t pin_mode = 21; 
-//f-prototypes to control the output
-void click();
-void output(bool on);
+
+#ifdef OUTPUT_ACTIVE
+  //latching 1 coil relay on P0.02 (D18) & P0.29 (D20)
+  uint8_t pin_out[2] = {18,20};
+  //different modes for the output
+  int mode = 0; 
+  // how many modes are used
+  #define MODE_MAX 3
+  //D21 -> P0.31 for the mode switch button
+  uint8_t pin_mode = 21; 
+  //f-prototypes to control the output
+  uint tremor_timeout_ms = 1000;
+  uint pause_timeout_s = 5;
+  void click();
+  void output(bool on);
+  void handleOutput(bool pressed, bool released);
+#endif
 
 void enterSleepMode() {
   if (ENABLE_DEBUG_OUTPUT) { Serial.println("Entering sleep mode..."); delay(50); } /*delay in debug is necessary to still print out via USB.*/
@@ -249,6 +255,9 @@ void loop()
       // button just pressed
       lastActivityTime = millis();
       buttonStates |= (1 << i);
+      #ifdef OUTPUT_ACTIVE
+        if(i == 0) handleOutput(true,false);
+      #endif
       uint8_t mod=0; uint8_t kc = asciiToKeycode(key_map[i], mod);
       if (kc) {
         modifiers |= mod; // add modifier bits
@@ -261,6 +270,9 @@ void loop()
       // button just released
       lastActivityTime = millis();
       buttonStates &= ~(1 << i);
+      #ifdef OUTPUT_ACTIVE
+        if(i == 0) handleOutput(false,true);
+      #endif
       uint8_t mod=0; uint8_t kc = asciiToKeycode(key_map[i], mod);
       if (kc) {
         removeActiveKey(kc);
@@ -272,6 +284,11 @@ void loop()
       }
     }
   }
+
+  #ifdef OUTPUT_ACTIVE
+    //even if not pressed or released, handle the output (for possible auto-releasing of output)
+    handleOutput(false,false);
+  #endif
 
   //read one line from serial
   while(Serial.available()) {
@@ -296,7 +313,7 @@ void loop()
     mode ++;
     if(mode == MODE_MAX) mode = 0;
 
-    if(ENABLE_DEBUG_OUTPUT) { Serial.print("Mode: "); Serial.println(mode); }
+    if(ENABLE_DEBUG_OUTPUT) { Serial.print("Mode: "); Serial.println(mode+1); }
 
     while(digitalRead(pin_mode) == false);
   }
@@ -324,6 +341,14 @@ bool storeSettings() {
   char buffer[MAX_PARAM_LEN] = {0};
   snprintf(buffer,MAX_PARAM_LEN,"i:%d\n",sleep_timeout_ms);
   file.write(buffer);
+  #ifdef OUTPUT_ACTIVE
+    snprintf(buffer,MAX_PARAM_LEN,"t:%d\n",tremor_timeout_ms);
+    file.write(buffer);
+    snprintf(buffer,MAX_PARAM_LEN,"p:%d\n",pause_timeout_s);
+    file.write(buffer);    
+    snprintf(buffer,MAX_PARAM_LEN,"m:%d\n",mode+1);
+    file.write(buffer);
+  #endif
 
   file.close();
   return true;
@@ -373,11 +398,14 @@ void parseCommand(char *buf) {
     case '?':
       // id string
       Serial.print("Bleeny - "); Serial.println(__DATE__);
-      Serial.print("i:<int>:Inactivity time [ms]:10000-600000:"); Serial.println(sleep_timeout_ms);
+      Serial.print("i:<int>:Inactivity time [ms]:30000-600000:"); Serial.println(sleep_timeout_ms);
       Serial.println("r:<none>:Reset paired devices");
       Serial.println("s:<none>:Store new settings on the device");
       #ifdef OUTPUT_ACTIVE
       Serial.println("c:<none>:Click the output");
+      Serial.print("t:<int>:Mode 1 - Tremor Timeout [ms]:300-5000:"); Serial.println(tremor_timeout_ms);
+      Serial.print("p:<int>:Mode 3 - Auto-Pause Timeout [s]:2-600:"); Serial.println(pause_timeout_s);
+      Serial.print("m:<int>:Mode:1-3:"); Serial.println(mode+1);
       #endif
       Serial.println("?:<none>:Print out supported commands and build date");
       //examples for more commands (+types)
@@ -390,15 +418,36 @@ void parseCommand(char *buf) {
     case 'i':
       Serial.print("Prev: "); Serial.println(sleep_timeout_ms);
       newValue = String(buf+2).toInt();
-      if(newValue >= 10000 && newValue <= 600000) sleep_timeout_ms = newValue;
+      if(newValue >= 30000 && newValue <= 600000) sleep_timeout_ms = newValue;
       Serial.print("New: "); Serial.println(sleep_timeout_ms);
-    break;
-
+    break;    
+    
     #ifdef OUTPUT_ACTIVE
-    case 'c':
-      click();
-      Serial.println("OK");
-    break;
+      //t: tremor timeout (mode 1)
+      case 't':
+        Serial.print("Prev: "); Serial.println(tremor_timeout_ms);
+        newValue = String(buf+2).toInt();
+        if(newValue >= 300 && newValue <= 5000) tremor_timeout_ms = newValue;
+        Serial.print("New: "); Serial.println(tremor_timeout_ms);
+      break;    
+      //p: auto-pause (mode 3)
+      case 'p':
+        Serial.print("Prev: "); Serial.println(pause_timeout_s);
+        newValue = String(buf+2).toInt();
+        if(newValue >= 2 && newValue <= 600) pause_timeout_s = newValue;
+        Serial.print("New: "); Serial.println(pause_timeout_s);
+      break;      
+      //m: mode
+      case 'm':
+        Serial.print("Prev: "); Serial.println(mode+1);
+        newValue = String(buf+2).toInt();
+        if(newValue >= 1 && newValue <= 3) mode = newValue-1;
+        Serial.print("New: "); Serial.println(mode+1);
+      break;
+      case 'c':
+        click();
+        Serial.println("OK");
+      break;
     #endif
 
     case 's':
@@ -415,6 +464,67 @@ void parseCommand(char *buf) {
 }
 
 #ifdef OUTPUT_ACTIVE
+void handleOutput(bool pressed, bool released) {
+  static int lastMode = 0xFF;
+  static unsigned long lastAction = 0;
+
+  //reset actions when switching mode
+  if(mode != lastMode) {
+    lastAction = 0;
+    lastMode = mode;
+  }
+
+  switch(mode) {
+    //anti-tremor: click & lock action for <tremor_timeout_ms>
+    case 0:
+      //1.) click when pressed & store last press
+      if(pressed && lastAction == 0) {
+        lastAction = millis();
+        click();
+      }
+      //2.) no action until tremor_timeout_ms passed
+      if(lastAction != 0 && (millis() - lastAction > tremor_timeout_ms)) {
+        lastAction = 0;
+      }
+      //3.) reset timer if multiple presses
+      if(pressed && lastAction != 0) {
+        lastAction = millis();
+      }
+    break;
+
+    //on each edge, click output once
+    case 1:
+      if(pressed || released) {
+        click();
+        #if ENABLE_DEBUG_OUTPUT
+          Serial.println("Mode 2: click");
+        #endif
+      }
+    break;
+
+    //on press: click, lock any action for <timeout> seconds, click. Then wait for click again
+    case 2:
+      //1.) click when pressed & store last press
+      if(pressed && lastAction == 0) {
+        lastAction = millis();
+        click();
+      }
+      //2.) no action until pause_timeout_s passed, then click
+      if(lastAction != 0 && (millis() - lastAction > (pause_timeout_s*1000))) {
+        lastAction = 0;
+        click();
+      }
+      //3.) reset timeout on multiple presses
+      if(pressed && lastAction != 0) {
+        lastAction = millis();
+      }
+
+    break;
+
+    default: break;
+  }
+}
+
 void click() {
   output(true);
   delay(100);
