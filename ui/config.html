@@ -7,7 +7,7 @@
     <style>
         @font-face {
             font-family: "CustomFont";
-            src: url("Futura Std Heavy.ttf") format("truetype");
+            src: url("Jost-Bold.ttf") format("truetype");
         }
 
         body {
@@ -246,8 +246,8 @@ function renderUI() {
                     opt.textContent = v;
                     el.appendChild(opt);
                 });
-                if(p.current) el.value = p.current;
-                btn.addEventListener("click", () => sendValue(p.cmd, el.value));
+                if(p.current) el.selectedIndex = p.current;
+                btn.addEventListener("click", () => sendValue(p.cmd, el.selectedIndex));
                 break;
 
             case "string":
@@ -261,9 +261,12 @@ function renderUI() {
                 btn.textContent = "Execute";
                 btn.addEventListener("click", () => sendLine(p.cmd));
                 break;
+            case "info":
+                btn.style.visibility = "hidden";
+                break;
         }
 
-        div.appendChild(btn);
+        if(btn) div.appendChild(btn);
 
         if (el) {
             div.appendChild(el);
