@@ -21,6 +21,9 @@
 #define ENABLE_ACTIVITY_LED 1
 #define ENABLE_DEBUG_OUTPUT 1  // set to 1 to enable serial debug output; 
 #define STARTUP_WAIT_SERIAL 0  // wait for Serial to be connected on startup. Note: this applies after wakeups too!
+#if STARTUP_WAIT_SERIAL == 1
+  #warning "NO RELEASE WITH WAIT FOR SERIAL!"
+#endif
 
 // sleep configuration
 uint sleep_timeout_ms = 180000;  // Sleep after 180 seconds of inactivity
@@ -28,25 +31,10 @@ unsigned long lastActivityTime = 0;
 bool sleepMode = false;
 
 // define ASCII-key action for each button
-#define NUM_BUTTONS 4
-uint8_t button_map[NUM_BUTTONS] = {BUTTON1, BUTTON2, BUTTON3, BUTTON4};
-//default key map (index in key_codes)
-uint8_t key_map[NUM_BUTTONS] = {0, 1, 2, 3};
-//overwrite the key_map (if set to >= 0), (index in key_codes)
-int8_t key_code_map[NUM_BUTTONS] = {-1};
+#define NUM_BUTTONS 1
+uint8_t button_map[NUM_BUTTONS] = {BUTTON1};
 uint8_t buttonStates = 0;
 
-//this firmware supports following keycodes in the settings (printHelp(), parseCommands() -> enums of keys)
-//Space, Enter, 1, 2, Tab, F1, F2, F13, F14
-#define SELECTABLE_KEYS 9
-uint8_t key_codes[SELECTABLE_KEYS] = {HID_KEY_SPACE, HID_KEY_ENTER, HID_KEY_1, HID_KEY_2, HID_KEY_TAB, HID_KEY_F1, HID_KEY_F2, HID_KEY_F13, HID_KEY_F14};
-
-// Multi-key state (up to 6 simultaneous keys + modifiers)
-static uint8_t active_keys[6] = {0};
-static uint8_t modifiers = 0; // e.g. KEYBOARD_MODIFIER_LEFT_SHIFT
-
-BLEDis bledis;
-BLEHidAdafruit blehid;
 //settings handling and parser at the end of the file
 void loadSettings();
 bool storeSettings();
@@ -56,28 +44,39 @@ void parseCommand(char *buf);
 void printHelp();
 #define MAX_PARAM_LEN 32
 
-/******* output to 3.5mm jackplug ******/
-//use output functions ('c' command)
-//#define OUTPUT_ACTIVE
+/******* output to Shelly Plug ******/
+uint8_t peripheral_mac[6];
+//different modes for the output
+int mode = 0; 
+// how many modes are used
+#define MODE_MAX 3
+//output mode: 0: click the output on each action; 1: toggle the output on each action
+int output_mode = 1;
+//f-prototypes to control the output
+uint tremor_timeout_ms = 500;
+uint pause_timeout_s = 5;
+void triggerOutput(bool on, bool toggle);
+void handleOutput(bool pressed, bool released);
+void printMAC();
 
-#ifdef OUTPUT_ACTIVE
-  //latching 1 coil relay on P0.02 (D18) & P0.29 (D20)
-  uint8_t pin_out[2] = {OUT1,OUT2};
-  //different modes for the output
-  int mode = 0; 
-  // how many modes are used
-  #define MODE_MAX 3
-  //pin for the mode switch button
-  uint8_t pin_mode = PIN_MODE; 
-  //output mode: 0: click the output on each action; 1: toggle the output on each action
-  int output_mode = 0;
-  //f-prototypes to control the output
-  uint tremor_timeout_ms = 1000;
-  uint pause_timeout_s = 5;
-  void triggerOutput();
-  void output(bool on);
-  void handleOutput(bool pressed, bool released);
-#endif
+/******* Shelly BLE stuff */
+//from: https://kb.shelly.cloud/knowledge-base/kbsa-communicating-with-shelly-devices-via-bluetoo
+#define SHELLY_GATT_SERVICE_UUID "5f6d4f53-5f52-5043-5f53-56435f49445f"
+#define SHELLY_RPC_CHAR_DATA_UUID  "5f6d4f53-5f52-5043-5f64-6174615f5f5f"
+#define SHELLY_RPC_CHAR_RX_CTL_UUID "5f6d4f53-5f52-5043-5f72-785f63746c5f"
+#define SHELLY_RPC_CHAR_TX_CTL_UUID "5f6d4f53-5f52-5043-5f74-785f63746c5f"
+BLEClientService        shelly_service(SHELLY_GATT_SERVICE_UUID);
+BLEClientCharacteristic shelly_rpc_data(SHELLY_RPC_CHAR_DATA_UUID);
+BLEClientCharacteristic shelly_rpc_rx_ctl(SHELLY_RPC_CHAR_RX_CTL_UUID);
+BLEClientCharacteristic shelly_rpc_tx_ctl(SHELLY_RPC_CHAR_TX_CTL_UUID);
+
+const char * shelly_toggle = "{\"id\":1,\"method\":\"Switch.Toggle\",\"params\":{\"id\":0}}"; 
+const char * shelly_on = "{\"id\":1,\"method\":\"Switch.Set\",\"params\":{\"id\":0,\"on\":true}}";
+const char * shelly_off = "{\"id\":1,\"method\":\"Switch.Set\",\"params\":{\"id\":0,\"on\":false}}";
+void shelly_send_rpc(const char * cmd); //user called function to send an RPC call to the shelly
+void shelly_notify_callback(BLEClientCharacteristic* chr, uint8_t* data, uint16_t len); //callback when receiving RPC answers from shelly (we will receive the size here)
+void connect_callback(uint16_t conn_handle); //activate service & characteristics here
+void scan_callback(ble_gap_evt_adv_report_t* report); //scanning -> store MAC address of Shelly here, if it is VERY close
 
 void enterSleepMode() {
   //if charge state pin is enabled, check: when charging don't enter sleep mode
@@ -124,65 +123,11 @@ void enterSleepMode() {
   #ifdef LED_B
     dWrite(LED_B,!LED_ON);
   #endif
-
-  //TODO: if on XIAO: disable res-divider for batt voltage
   
   // Put nRF52 into low power mode
   sd_power_system_off();
   // This line won't be reached as system_off() causes a reset
 }
-
-bool addActiveKey(uint8_t keycode) {
-  if (!keycode) return false;
-  for (uint8_t i=0;i<6;i++) if (active_keys[i] == keycode) return false; // already
-  for (uint8_t i=0;i<6;i++) if (active_keys[i] == 0) { active_keys[i] = keycode; return true; }
-  return false; // full
-}
-
-bool removeActiveKey(uint8_t keycode) {
-  bool removed = false;
-  for (uint8_t i=0;i<6;i++) if (active_keys[i] == keycode) { active_keys[i] = 0; removed = true; }
-  return removed;
-}
-
-void startAdv(void)
-{  
-  // Advertising packet
-  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
-  Bluefruit.Advertising.addTxPower();
-  Bluefruit.Advertising.addAppearance(BLE_APPEARANCE_HID_KEYBOARD);
-
-  // Include BLE HID service
-  Bluefruit.Advertising.addService(blehid);
-
-  // There is enough room for the dev name in the advertising packet
-  Bluefruit.Advertising.addName();
-  
-  /* Start Advertising
-   * - Enable auto advertising if disconnected
-   * - Interval:  fast mode = 20 ms, slow mode = 152.5 ms
-   * - Timeout for fast mode is 30 seconds
-   * - Start(timeout) with timeout = 0 will advertise forever (until connected)
-   * 
-   * For recommended advertising interval
-   * https://developer.apple.com/library/content/qa/qa1931/_index.html   
-   */
-  Bluefruit.Advertising.restartOnDisconnect(true);
-  Bluefruit.Advertising.setInterval(32, 244);    // in unit of 0.625 ms
-  Bluefruit.Advertising.setFastTimeout(30);      // number of seconds in fast mode
-  if (!Bluefruit.Advertising.start(0)) {          // 0 = Don't stop advertising after n seconds
-    if (ENABLE_DEBUG_OUTPUT) Serial.println("ERROR: Failed to start advertising!");
-  } else {
-    if (ENABLE_DEBUG_OUTPUT) {
-      char name_buffer[64];
-      if (Bluefruit.getName(name_buffer, sizeof(name_buffer)) > 0) {
-        Serial.print("Advertising as: ");
-        Serial.println(name_buffer);
-      }    
-    }
-  }
-}
-
 
 void setup() 
 {
@@ -196,9 +141,10 @@ void setup()
     dMode(CHARGE_STATE,INPUT_PULLUP);
   #endif
 
-  if (ENABLE_DEBUG_OUTPUT) {
-    Serial.begin(115200);  // note: the USB CDC serial port is not only useful for debugging
+  Serial.begin(115200);  // note: the USB CDC serial port is not only useful for debugging
                          // but also for resetting the nRF52 when uploading code via the bootloader
+  if (ENABLE_DEBUG_OUTPUT) {
+
     if(STARTUP_WAIT_SERIAL) {
       while ( !Serial ) delay(10);   // wait until Serial is connected 
     }
@@ -213,58 +159,47 @@ void setup()
     dMode(LED_R, OUTPUT);  //Set the LED to output mode.
   }
 
+  dMode(PIN_MODE,INPUT_PULLUP);
+
   dMode(EXT_LOW_PIN, OUTPUT); 
   //OUTPUT_H0H1 //high drive sink & source
   dWrite(EXT_LOW_PIN, LOW); // turn off external LDO to save power
 
-  //if output is active, activate GPIOs in high drive mode
-  #ifdef OUTPUT_ACTIVE
-  dMode(pin_out[0], OUTPUT_H0H1);
-  dMode(pin_out[1], OUTPUT_H0H1);
-  dMode(pin_mode, INPUT_PULLUP);
-  #endif
-
   loadSettings();
 
  
-  if (!Bluefruit.begin()) {
+  if (!Bluefruit.begin(0,1)) {
     if (ENABLE_DEBUG_OUTPUT) Serial.println("ERROR: Failed to initialize Bluefruit!");
     while(1);
   }
 
-  Bluefruit.setTxPower(4);    
+  Bluefruit.setName("BleenyButton - Shelly");
+  // Initialize Shelly service
+  shelly_service.begin();
+  // and add characteristics
+  shelly_rpc_data.begin(); //READ / WRITE
+  shelly_rpc_rx_ctl.setNotifyCallback(shelly_notify_callback); //INDICATE / NOTIFY / READ
+  shelly_rpc_rx_ctl.setIndicateCallback(shelly_notify_callback); //INDICATE / NOTIFY / READ
+  shelly_rpc_rx_ctl.begin(); 
+  shelly_rpc_tx_ctl.begin(); // WRITE
 
-  // Get MAC address and create unique advertising name
-  uint8_t mac[6];
-  Bluefruit.getAddr(mac);
-  char name_buffer[64]={0};
-  sprintf (name_buffer, "Bleeny-%02X%02X", mac[4], mac[5]);
-  Bluefruit.setName(name_buffer);
-  //not used, we read out the connected device in printHelp()
-  //Bluefruit.Periph.setConnectCallback(connect_callback);
+  // Callbacks for Central
+  Bluefruit.Central.setConnectCallback(connect_callback);
 
-  // Configure and Start Device Information Service
-  bledis.setManufacturer("AsTeRICS Foundation / Assistronik");
-  bledis.setModel("BleenyButton");
-  bledis.begin();
-
-  /* Start BLE HID
-   * Note: Apple requires BLE device must have min connection interval >= 20m
-   * ( The smaller the connection interval the faster we could send data).
-   * However for HID and MIDI device, Apple could accept min connection interval 
-   * up to 11.25 ms. Therefore BLEHidAdafruit::begin() will try to set the min and max
-   * connection interval to 11.25  ms and 15 ms respectively for best performance.
+  /* Start Central Scanning
+   * - Enable auto scan if disconnected
+   * - Interval = 100 ms, window = 80 ms
+   * - Don't use active scan
+   * - Filter only accept HRM service
+   * - Start(timeout) with timeout = 0 will scan forever (until connected)
    */
-  blehid.begin();
+  Bluefruit.Scanner.setRxCallback(scan_callback);
+  Bluefruit.Scanner.restartOnDisconnect(true);
+  Bluefruit.Scanner.setInterval(160, 80); // in unit of 0.625 ms
+  Bluefruit.Scanner.useActiveScan(false);
+  Bluefruit.Scanner.start(0);                   // // 0 = Don't stop scanning after n seconds
 
-  /* Set connection interval (min, max) to your perferred value.
-   * Note: It is already set by BLEHidAdafruit::begin() to 11.25ms - 15ms
-   * min = 9*1.25=11.25 ms, max = 12*1.25= 15 ms 
-   */
-  /* Bluefruit.Periph.setConnInterval(9, 12); */
-
-  // Set up and start advertising
-  startAdv();
+  if(ENABLE_DEBUG_OUTPUT) Serial.println("Bluefruit Central setup finished");
 
   lastActivityTime = millis();  // initialize activity timer
 }
@@ -285,31 +220,20 @@ void loop()
       // button just pressed
       lastActivityTime = millis();
       buttonStates |= (1 << i);
-      #ifdef OUTPUT_ACTIVE
-        if(i == 0) handleOutput(true,false);
-      #endif
-      addActiveKey(key_codes[key_map[i]]);
-      blehid.keyboardReport(modifiers, active_keys);
-      // if (ENABLE_ACTIVITY_LED ) dToggle(LED_R);
+      if(i == 0) handleOutput(true,false);
       if (ENABLE_DEBUG_OUTPUT) Serial.println("Button pressed");
     } else if ( !pressed && (buttonStates & (1 << i)) ) {
       // button just released
       lastActivityTime = millis();
       buttonStates &= ~(1 << i);
-      #ifdef OUTPUT_ACTIVE
-        if(i == 0) handleOutput(false,true);
-      #endif
-      removeActiveKey(key_codes[key_map[i]]);
-      blehid.keyboardReport(modifiers, active_keys);
+      if(i == 0) handleOutput(false,true);
       //if (ENABLE_ACTIVITY_LED ) dToggle(LED_R);
       if (ENABLE_DEBUG_OUTPUT) Serial.println("Button released");
     }
   }
 
-  #ifdef OUTPUT_ACTIVE
-    //even if not pressed or released, handle the output (for possible auto-releasing of output)
-    handleOutput(false,false);
-  #endif
+  //even if not pressed or released, handle the output (for possible auto-releasing of output)
+  handleOutput(false,false);
 
   //read one line from serial
   while(Serial.available()) {
@@ -327,18 +251,16 @@ void loop()
     }
   }
 
-  //if enabled, check the mode switch button for the output
-  #ifdef OUTPUT_ACTIVE
-  if(dRead(pin_mode) == false) {
+  //check the mode switch button for the output
+  if(dRead(PIN_MODE) == false) {
     delay(10);
     mode ++;
     if(mode == MODE_MAX) mode = 0;
 
     if(ENABLE_DEBUG_OUTPUT) { Serial.print("Mode: "); Serial.println(mode+1); }
 
-    while(dRead(pin_mode) == false);
+    while(dRead(PIN_MODE) == false);
   }
-  #endif
 
   // Check for sleep timeout
   if (millis() - lastActivityTime  > sleep_timeout_ms) enterSleepMode();
@@ -363,25 +285,17 @@ bool storeSettings() {
   snprintf(buffer,MAX_PARAM_LEN,"i:%d\n",sleep_timeout_ms);
   file.write(buffer);
 
-  //save keycodes
-  //Note: currently only 2 buttons are saved, although it might be possible to
-  // configure all buttons, but in the UI only 2 are visible (for better overview)
-  for(int i = 0; i<2; i++) {
-    snprintf(buffer,MAX_PARAM_LEN,"%d:%d\n",i,key_map[i]);
-    file.write(buffer);
-  }
-  
 
-  #ifdef OUTPUT_ACTIVE
-    snprintf(buffer,MAX_PARAM_LEN,"t:%d\n",tremor_timeout_ms);
-    file.write(buffer);
-    snprintf(buffer,MAX_PARAM_LEN,"o:%d\n",output_mode);
-    file.write(buffer);
-    snprintf(buffer,MAX_PARAM_LEN,"p:%d\n",pause_timeout_s);
-    file.write(buffer);    
-    snprintf(buffer,MAX_PARAM_LEN,"m:%d\n",mode+1);
-    file.write(buffer);
-  #endif
+  memclr(buffer,MAX_PARAM_LEN); snprintf(buffer,MAX_PARAM_LEN,"t:%d\n",tremor_timeout_ms);
+  file.write(buffer);
+  memclr(buffer,MAX_PARAM_LEN); snprintf(buffer,MAX_PARAM_LEN,"o:%d\n",output_mode);
+  file.write(buffer);
+  memclr(buffer,MAX_PARAM_LEN); snprintf(buffer,MAX_PARAM_LEN,"p:%d\n",pause_timeout_s);
+  file.write(buffer);    
+  memclr(buffer,MAX_PARAM_LEN); snprintf(buffer,MAX_PARAM_LEN,"m:%d\n",mode+1);
+  file.write(buffer);  
+  memclr(buffer,MAX_PARAM_LEN); snprintf(buffer,MAX_PARAM_LEN,"r:%02X:%02X:%02X:%02X:%02X:%02X\n",peripheral_mac[0],peripheral_mac[1],peripheral_mac[2],peripheral_mac[3],peripheral_mac[4],peripheral_mac[5]);
+  file.write(buffer);
 
   file.close();
   return true;
@@ -406,10 +320,11 @@ void loadSettings() {
         }
 
         if(buffer[i] == '\n') {
+          buffer[i] = 0;
           break;
         }
       }
-      if(ENABLE_DEBUG_OUTPUT) { Serial.println("Found setting: "); Serial.print(buffer);}
+      if(ENABLE_DEBUG_OUTPUT) { Serial.print("Found setting: "); Serial.println(buffer);}
       //send command to parser
       parseCommand(buffer);
     } while(readSuccess || totalRead < file.size());
@@ -438,50 +353,39 @@ void parseCommand(char *buf) {
       if(newValue >= 30000 && newValue <= 600000) sleep_timeout_ms = newValue;
       Serial.print("New: "); Serial.println(sleep_timeout_ms);
     break;
-
-    //handle button<->key code assignment
-    case '1':
-    case '2':
-      newValue = buf[0] - '1'; //get button index
-      Serial.print("Prev: "); Serial.println(key_map[newValue]);
-      key_map[newValue] = String(buf+2).toInt();
-      Serial.print("New: "); Serial.println(key_map[newValue]);
-    break;
     
-    #ifdef OUTPUT_ACTIVE
-      //t: tremor timeout (mode 1)
-      case 't':
-        Serial.print("Prev: "); Serial.println(tremor_timeout_ms);
-        newValue = String(buf+2).toInt();
-        if(newValue >= 300 && newValue <= 5000) tremor_timeout_ms = newValue;
-        Serial.print("New: "); Serial.println(tremor_timeout_ms);
-      break;    
-      //p: auto-pause (mode 3)
-      case 'p':
-        Serial.print("Prev: "); Serial.println(pause_timeout_s);
-        newValue = String(buf+2).toInt();
-        if(newValue >= 2 && newValue <= 600) pause_timeout_s = newValue;
-        Serial.print("New: "); Serial.println(pause_timeout_s);
-      break;        
-      //o: output mode type (click or toggle)
-      case 'o':
-        Serial.print("Prev: "); Serial.println(output_mode);
-        newValue = String(buf+2).toInt();
-        if(newValue >= 0 && newValue <= 1) output_mode = newValue;
-        Serial.print("New: "); Serial.println(output_mode);
-      break;      
-      //m: mode
-      case 'm':
-        Serial.print("Prev: "); Serial.println(mode+1);
-        newValue = String(buf+2).toInt();
-        if(newValue >= 1 && newValue <= 3) mode = newValue-1;
-        Serial.print("New: "); Serial.println(mode+1);
-      break;
-      case 'c':
-        triggerOutput();
-        Serial.println("OK");
-      break;
-    #endif
+    //t: tremor timeout (mode 1)
+    case 't':
+      Serial.print("Prev: "); Serial.println(tremor_timeout_ms);
+      newValue = String(buf+2).toInt();
+      if(newValue >= 300 && newValue <= 5000) tremor_timeout_ms = newValue;
+      Serial.print("New: "); Serial.println(tremor_timeout_ms);
+    break;    
+    //p: auto-pause (mode 3)
+    case 'p':
+      Serial.print("Prev: "); Serial.println(pause_timeout_s);
+      newValue = String(buf+2).toInt();
+      if(newValue >= 2 && newValue <= 600) pause_timeout_s = newValue;
+      Serial.print("New: "); Serial.println(pause_timeout_s);
+    break;        
+    //o: output mode type (click or toggle)
+    case 'o':
+      Serial.print("Prev: "); Serial.println(output_mode);
+      newValue = String(buf+2).toInt();
+      if(newValue >= 0 && newValue <= 1) output_mode = newValue;
+      Serial.print("New: "); Serial.println(output_mode);
+    break;      
+    //m: mode
+    case 'm':
+      Serial.print("Prev: "); Serial.println(mode+1);
+      newValue = String(buf+2).toInt();
+      if(newValue >= 1 && newValue <= 3) mode = newValue-1;
+      Serial.print("New: "); Serial.println(mode+1);
+    break;
+    case 'c':
+      triggerOutput(false,false);
+      Serial.println("OK");
+    break;
 
     case 's':
       if(storeSettings()) Serial.println("OK");
@@ -490,38 +394,33 @@ void parseCommand(char *buf) {
 
     case 'r':
       //reset the BLE pairings
-      Bluefruit.Periph.clearBonds();
-      Serial.println("OK");
+      //TODO: set or clear here the MAC Adress
+      Serial.print("Prev: "); printMAC();
+      for(int i = 0; i<6; i++) {
+        peripheral_mac[i] = strtol(buf+2+i*3,NULL,16);
+      }
+      Serial.print("New: "); printMAC();
     break;
   }
 }
 
 void printHelp() {
   // id string
-  #ifdef OUTPUT_ACTIVE
-    Serial.print("Bleeny with Output - "); 
-  #else
-    Serial.print("Bleeny - "); 
-  #endif
+  Serial.println("BleenyShelly");
 
-  char central_name[32] = { 0 };
-  Bluefruit.Connection(Bluefruit.connHandle())->getPeerName(central_name, sizeof(central_name));
+  char shelly_name[32] = { 0 };
+  Bluefruit.Connection(Bluefruit.connHandle())->getPeerName(shelly_name, sizeof(shelly_name));
   
   Serial.println(__DATE__);
   Serial.println("s:<none>:Store new settings on the device");
   Serial.print("i:<int>:Inactivity time [ms]:30000-600000:"); Serial.println(sleep_timeout_ms);
-  Serial.print("d:<info>:Connected device::"); Serial.println(central_name);
-  Serial.println("r:<none>:Reset paired devices");
-  Serial.print("1:<enum>:Key 1:Space,Enter,1,2,Tab,F1,F2,F13,F14:"); Serial.println(key_map[0]);
-  Serial.print("2:<enum>:Key 2:Space,Enter,1,2,Tab,F1,F2,F13,F14:"); Serial.println(key_map[1]);
-
-  #ifdef OUTPUT_ACTIVE
+  Serial.print("d:<info>:Connected device::"); Serial.println(shelly_name);
+  Serial.print("r:<string>:Set Shelly MAC:18:"); printMAC(); Serial.println("");
   Serial.println("c:<none>:Trigger the output");
-  Serial.println("o:<enum>:Output mode:click,toggle");
+  Serial.print("o:<enum>:Output mode:click,toggle:"); Serial.println(output_mode);
   Serial.print("t:<int>:Mode 1 - Tremor Timeout [ms]:300-5000:"); Serial.println(tremor_timeout_ms);
   Serial.print("p:<int>:Mode 3 - Auto-Pause Timeout [s]:2-600:"); Serial.println(pause_timeout_s);
   Serial.print("m:<int>:Startup Mode:1-3:"); Serial.println(mode+1);
-  #endif
   Serial.println("?:<none>:Print out supported commands and build date");
   //examples for more commands (+types)
   //Serial.println("b:<bool>:Enable Bluetooth");
@@ -531,7 +430,6 @@ void printHelp() {
   //Serial.println("f:<float>:Temperature offset:-10.0-10.0");
 }
 
-#ifdef OUTPUT_ACTIVE
 void handleOutput(bool pressed, bool released) {
   static int lastMode = 0xFF;
   static unsigned long lastAction = 0;
@@ -548,7 +446,10 @@ void handleOutput(bool pressed, bool released) {
       //1.) click when pressed & store last press
       if(pressed && lastAction == 0) {
         lastAction = millis();
-        triggerOutput();
+        #if ENABLE_DEBUG_OUTPUT
+          Serial.println("Mode 1: toggle");
+        #endif
+        triggerOutput(false,true);
       }
       //2.) no action until tremor_timeout_ms passed
       if(lastAction != 0 && (millis() - lastAction > tremor_timeout_ms)) {
@@ -563,7 +464,7 @@ void handleOutput(bool pressed, bool released) {
     //on each edge, click output once
     case 1:
       if(pressed || released) {
-        triggerOutput();
+        triggerOutput(pressed,false);
         #if ENABLE_DEBUG_OUTPUT
           Serial.println("Mode 2: click");
         #endif
@@ -575,12 +476,18 @@ void handleOutput(bool pressed, bool released) {
       //1.) click when pressed & store last press
       if(pressed && lastAction == 0) {
         lastAction = millis();
-        triggerOutput();
+        triggerOutput(pressed,false);
+        #if ENABLE_DEBUG_OUTPUT
+          Serial.println("Mode 3: start");
+        #endif
       }
       //2.) no action until pause_timeout_s passed, then click
       if(lastAction != 0 && (millis() - lastAction > (pause_timeout_s*1000))) {
         lastAction = 0;
-        triggerOutput();
+        triggerOutput(false,false);
+        #if ENABLE_DEBUG_OUTPUT
+          Serial.println("Mode 3: stop");
+        #endif
       }
       //3.) reset timeout on multiple presses
       if(pressed && lastAction != 0) {
@@ -593,36 +500,184 @@ void handleOutput(bool pressed, bool released) {
   }
 }
 
-void triggerOutput() {
+void triggerOutput(bool on, bool toggle) {
   static int current = -1;
-  if(current == -1) { 
-    output(false); 
+  if(current == -1) {
+    shelly_send_rpc(shelly_off);
     current = 0;
   }
 
   if(output_mode == 0) {
-    output(true);
-    delay(100);
-    output(false);
-  } else {
-    if(current == 0) {
-      output(true);
-      current = 1;
+    //mode 0 -> always toggle
+    shelly_send_rpc(shelly_on);
+    delay(500);
+    shelly_send_rpc(shelly_off);
+    return;
+  }
+
+  //mode 1: on/off
+  if(output_mode == 1) {
+    if(!toggle) {
+      if(on && current == 0) {
+        shelly_send_rpc(shelly_on);
+        current = 1;
+      } else if(!on && current == 1) {
+        shelly_send_rpc(shelly_off);
+        current = 0;
+      }
     } else {
-      output(false);
-      current = 0;
+      shelly_send_rpc(shelly_toggle);
+      if(current) current = 0;
     }
   }
 }
 
-void output(bool on) {
-  dWrite(pin_out[0], on);
-  dWrite(pin_out[1], !on);
+void scan_callback(ble_gap_evt_adv_report_t* report)
+{
+  if(ENABLE_DEBUG_OUTPUT) {
+    Serial.println("Got scan callback");
 
-  //2ms settle time
-  delay(2);
+    Serial.print("RSSI: "); Serial.println(report->rssi);
+    Serial.print("Peer: "); 
+    for(int i = 0; i<5; i++) { Serial.print(report->peer_addr.addr[i],HEX); Serial.print(":"); }
+    Serial.println(report->peer_addr.addr[5],HEX);
+  }
 
-  dWrite(pin_out[0], false);
-  dWrite(pin_out[1], false);
+  //VERY close -> store MAC
+  if(report->rssi > -35) {
+    memcpy(peripheral_mac,report->peer_addr.addr,6);
+    Serial.print("New pairing: "); printMAC(); Serial.println("");
+    storeSettings();
+  }
+
+  //we need to connect always, don't know why
+  Bluefruit.Central.connect(report);
 }
-#endif
+
+void connect_callback(uint16_t conn_handle)
+{
+  if(ENABLE_DEBUG_OUTPUT)  {
+    Serial.println("Connected");
+    Serial.print("Discovering Shelly Service ... ");
+  }
+
+  //if MAC is correct, then connect
+  ble_gap_addr_t peer = Bluefruit.Connection(conn_handle)->getPeerAddr();
+  if(memcmp(peer.addr, peripheral_mac, 6) != 0) {
+    Serial.print("Not matching paired MAC");
+    Bluefruit.disconnect(conn_handle);
+    return;
+  }
+
+  // If Shelly service is not found, disconnect and return
+  if ( !shelly_service.discover(conn_handle) )
+  {
+    if(ENABLE_DEBUG_OUTPUT) Serial.println("Found NONE");
+    // disconnect
+    Bluefruit.disconnect(conn_handle);
+    return;
+  }
+
+  // Once HRM service is found, we continue to discover its characteristic
+  if(ENABLE_DEBUG_OUTPUT) {
+    Serial.println("Found it");
+    Serial.print("Discovering RPC Data characteristic ... ");
+  }
+
+  if ( !shelly_rpc_data.discover() )
+  {
+    // necessary, not found -> disconnect
+    if(ENABLE_DEBUG_OUTPUT) Serial.println("RPC data is mandatory but not found");
+    Bluefruit.disconnect(conn_handle);
+    return;
+  }
+
+  if(ENABLE_DEBUG_OUTPUT)  {
+    Serial.println("Found it");
+    Serial.print("Discovering RPC RX ctl characteristic ... ");
+  }
+
+  if ( !shelly_rpc_rx_ctl.discover() )
+  {
+    // necessary, not found -> disconnect
+    if(ENABLE_DEBUG_OUTPUT) Serial.println("RPC RX CTL is mandatory but not found");
+    Bluefruit.disconnect(conn_handle);
+    return;
+  }
+
+  if(ENABLE_DEBUG_OUTPUT)  {
+    Serial.println("Found it");  
+    Serial.println("Discovering RPC TX ctl characteristic ... ");
+  }
+
+  if ( !shelly_rpc_tx_ctl.discover() )
+  {
+    // necessary, not found -> disconnect
+    if(ENABLE_DEBUG_OUTPUT) Serial.println("RPC TX CTL is mandatory but not found");
+    Bluefruit.disconnect(conn_handle);
+    return;
+  }
+
+  // Reaching here means we are ready to go, let's enable notification on RX CTL
+  if ( shelly_rpc_rx_ctl.enableNotify() ) {
+    if(ENABLE_DEBUG_OUTPUT)  Serial.println("Ready to receive RX CTL value");
+  } else {
+    if(ENABLE_DEBUG_OUTPUT)  Serial.println("Couldn't enable notify for RX CTL.");
+  }
+  // Reaching here means we are ready to go, let's enable notification on RX CTL
+  if ( shelly_rpc_rx_ctl.enableIndicate() ) {
+    if(ENABLE_DEBUG_OUTPUT)  Serial.println("Ready to receive RX CTL value indicate");
+  } else {
+    if(ENABLE_DEBUG_OUTPUT)  Serial.println("Couldn't enable indicate for RX CTL.");
+  }
+}
+
+void printMAC() {
+  for(int i = 0; i<6; i++) {
+    if(peripheral_mac[i] < 0x10) Serial.print("0");
+    Serial.print(peripheral_mac[i],HEX);
+    if(i<5) Serial.print(":");
+  }
+}
+
+void shelly_notify_callback(BLEClientCharacteristic* chr, uint8_t* data, uint16_t len)
+{
+  //currently we don't read back RPC answers, so simply print length and do nothing
+  //if the data characteristics is not read, the length won't be updated
+  //expect this callback firing once when nothing else is done.
+  if(ENABLE_DEBUG_OUTPUT) {
+    Serial.print("Got RX - Len: ");
+    uint32_t rcv_len = 0;
+    //we expect a 32bit length field
+    if(len == 4) {
+      rcv_len = (uint32_t)data[0] << 24 | (uint32_t)data[1] << 16 | (uint32_t)data[2] << 8 | (uint32_t)data[3];
+    }
+    Serial.println(rcv_len);
+  }
+}
+
+
+void shelly_send_rpc(const char * cmd) {
+
+    uint8_t length[4];
+    uint32_t sent = 0;
+
+    length[3] = strlen(cmd);
+    sent = shelly_rpc_tx_ctl.write(length,4);
+
+    if(ENABLE_DEBUG_OUTPUT) {
+      Serial.print("Sending len, size sent: ");
+      Serial.println(sent);
+    }
+  
+    delay(10);
+
+    sent = shelly_rpc_data.write(cmd, strlen(cmd));
+    if(ENABLE_DEBUG_OUTPUT) {
+      Serial.print("Sending rpc call, size sent: ");
+      Serial.println(sent);
+    }
+
+    delay(10);
+}
+
