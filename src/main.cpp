@@ -58,7 +58,7 @@ void printHelp();
 
 /******* output to 3.5mm jackplug ******/
 //use output functions ('c' command)
-#define OUTPUT_ACTIVE
+//#define OUTPUT_ACTIVE
 
 #ifdef OUTPUT_ACTIVE
   //latching 1 coil relay on P0.02 (D18) & P0.29 (D20)
@@ -80,8 +80,19 @@ void printHelp();
 #endif
 
 void enterSleepMode() {
-  //TODO: check if we are charging -> no sleep mode!
-
+  //if charge state pin is enabled, check: when charging don't enter sleep mode
+  #ifdef CHARGE_STATE
+    if(dRead(CHARGE_STATE) == LOW) {
+      if(ENABLE_DEBUG_OUTPUT) Serial.println("Charging, don't enter sleep mode");
+      lastActivityTime = millis();
+      return;
+    }
+  #endif
+  //if we have the battery state on a voltage divider, disable it when entering sleep mode
+  //note: don't set this to input when charging, worst case: 4.2V on GPIO pin...
+  #ifdef VBATT_DIVIDER_LOW
+    dMode(VBATT_DIVIDER_LOW,INPUT);
+  #endif
 
   if (ENABLE_DEBUG_OUTPUT) { Serial.println("Entering sleep mode..."); delay(50); } /*delay in debug is necessary to still print out via USB.*/
   sleepMode = true;
@@ -113,6 +124,8 @@ void enterSleepMode() {
   #ifdef LED_B
     dWrite(LED_B,!LED_ON);
   #endif
+
+  //TODO: if on XIAO: disable res-divider for batt voltage
   
   // Put nRF52 into low power mode
   sd_power_system_off();
@@ -173,6 +186,16 @@ void startAdv(void)
 
 void setup() 
 {
+  //if on XIAO: enable res-divider (might be dangerous: charging & disabled res-divider...)
+  //https://wiki.seeedstudio.com/XIAO_BLE/#q3-what-are-the-considerations-when-using-xiao-nrf52840-sense-for-battery-charging
+  #ifdef VBATT_DIVIDER_LOW
+    dMode(VBATT_DIVIDER_LOW,OUTPUT);
+    dWrite(VBATT_DIVIDER_LOW,LOW);
+  #endif
+  #ifdef CHARGE_STATE
+    dMode(CHARGE_STATE,INPUT_PULLUP);
+  #endif
+
   if (ENABLE_DEBUG_OUTPUT) {
     Serial.begin(115200);  // note: the USB CDC serial port is not only useful for debugging
                          // but also for resetting the nRF52 when uploading code via the bootloader
@@ -473,6 +496,41 @@ void parseCommand(char *buf) {
   }
 }
 
+void printHelp() {
+  // id string
+  #ifdef OUTPUT_ACTIVE
+    Serial.print("Bleeny with Output - "); 
+  #else
+    Serial.print("Bleeny - "); 
+  #endif
+
+  char central_name[32] = { 0 };
+  Bluefruit.Connection(Bluefruit.connHandle())->getPeerName(central_name, sizeof(central_name));
+  
+  Serial.println(__DATE__);
+  Serial.println("s:<none>:Store new settings on the device");
+  Serial.print("i:<int>:Inactivity time [ms]:30000-600000:"); Serial.println(sleep_timeout_ms);
+  Serial.print("d:<info>:Connected device::"); Serial.println(central_name);
+  Serial.println("r:<none>:Reset paired devices");
+  Serial.print("1:<enum>:Key 1:Space,Enter,1,2,Tab,F1,F2,F13,F14:"); Serial.println(key_map[0]);
+  Serial.print("2:<enum>:Key 2:Space,Enter,1,2,Tab,F1,F2,F13,F14:"); Serial.println(key_map[1]);
+
+  #ifdef OUTPUT_ACTIVE
+  Serial.println("c:<none>:Trigger the output");
+  Serial.println("o:<enum>:Output mode:click,toggle");
+  Serial.print("t:<int>:Mode 1 - Tremor Timeout [ms]:300-5000:"); Serial.println(tremor_timeout_ms);
+  Serial.print("p:<int>:Mode 3 - Auto-Pause Timeout [s]:2-600:"); Serial.println(pause_timeout_s);
+  Serial.print("m:<int>:Startup Mode:1-3:"); Serial.println(mode+1);
+  #endif
+  Serial.println("?:<none>:Print out supported commands and build date");
+  //examples for more commands (+types)
+  //Serial.println("b:<bool>:Enable Bluetooth");
+  //Serial.println("b:<info>:Connected device");
+  //Serial.println("m:<enum>:Operating mode:auto,manual,test");
+  //Serial.println("n:<string>:Device name:1-32");
+  //Serial.println("f:<float>:Temperature offset:-10.0-10.0");
+}
+
 #ifdef OUTPUT_ACTIVE
 void handleOutput(bool pressed, bool released) {
   static int lastMode = 0xFF;
@@ -533,41 +591,6 @@ void handleOutput(bool pressed, bool released) {
 
     default: break;
   }
-}
-
-void printHelp() {
-  // id string
-  #ifdef OUTPUT_ACTIVE
-    Serial.print("Bleeny with Output - "); 
-  #else
-    Serial.print("Bleeny - "); 
-  #endif
-
-  char central_name[32] = { 0 };
-  Bluefruit.Connection(Bluefruit.connHandle())->getPeerName(central_name, sizeof(central_name));
-  
-  Serial.println(__DATE__);
-  Serial.println("s:<none>:Store new settings on the device");
-  Serial.print("i:<int>:Inactivity time [ms]:30000-600000:"); Serial.println(sleep_timeout_ms);
-  Serial.print("d:<info>:Connected device::"); Serial.println(central_name);
-  Serial.println("r:<none>:Reset paired devices");
-  Serial.print("1:<enum>:Key 1:Space,Enter,1,2,Tab,F1,F2,F13,F14:"); Serial.println(key_map[0]);
-  Serial.print("2:<enum>:Key 2:Space,Enter,1,2,Tab,F1,F2,F13,F14:"); Serial.println(key_map[1]);
-
-  #ifdef OUTPUT_ACTIVE
-  Serial.println("c:<none>:Trigger the output");
-  Serial.println("o:<enum>:Output mode:click,toggle");
-  Serial.print("t:<int>:Mode 1 - Tremor Timeout [ms]:300-5000:"); Serial.println(tremor_timeout_ms);
-  Serial.print("p:<int>:Mode 3 - Auto-Pause Timeout [s]:2-600:"); Serial.println(pause_timeout_s);
-  Serial.print("m:<int>:Startup Mode:1-3:"); Serial.println(mode+1);
-  #endif
-  Serial.println("?:<none>:Print out supported commands and build date");
-  //examples for more commands (+types)
-  //Serial.println("b:<bool>:Enable Bluetooth");
-  //Serial.println("b:<info>:Connected device");
-  //Serial.println("m:<enum>:Operating mode:auto,manual,test");
-  //Serial.println("n:<string>:Device name:1-32");
-  //Serial.println("f:<float>:Temperature offset:-10.0-10.0");
 }
 
 void triggerOutput() {
