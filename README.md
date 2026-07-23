@@ -43,6 +43,7 @@ Optional (if using the BleenyButton with the output enabled):
 
 * [FTR-B3GB003Z](https://www.tme.eu/at/en/details/ftr-b3gb003z/miniature-electromagnetic-relays/fcl-components/) mini relay, latching, 3V
 * [FC68125](https://www.tme.eu/at/en/details/fc68125/jack-connectors/cliff/) 3.5mm jack
+* 6x6mm Button, 8.35mm length (mode switching)
 
 ### Assembly
 
@@ -74,7 +75,7 @@ Please have a look at the pictures named __wiring_*__ in the folder `img`, selec
 * Open this folder with VSCodium (or VSCode if prefer M$ tracking)
 * Select the correct target in PlatformIO:
   * XIAO nRF52840: `[env:xiao_nrf52840]`
-  * Tenstar: first select `[env:adafruit_feather_nrf52840]`, build an example and the build with `[env:nicenano]`
+  * Tenstar: Follow the [installation guide](https://github.com/ICantMakeThings/Nicenano-NRF52-Supermini-PlatformIO-Support) , build an example and the build with `[env:nicenano]`
 * With relay/jackplug: enable `//#define OUTPUT_ACTIVE`
 * Upload
 
@@ -84,7 +85,56 @@ Please have a look at the pictures named __wiring_*__ in the folder `img`, selec
 ![parts mounted in base](img/Bleeny_parts2.jpg)
 ![assembled Bleeny Button](img/BleenyButton.jpg)
 
+## Configuration (UI)
+
+The BleenyButton can be configured via the USB-CDC (USB-Serial) interface. An unknown/empty command or `?\n` prints out the help with possible commands. This is used for UI as well, which shows the possible options based on the help output.
+
+Open the UI either by opening the file `/ui/config.html` with a browser (not in GitHub!) locally OR open it at [https://assistronik.info/config.html](https://assistronik.info/config.html).
+
+Press __connect__ and select the BleenyButton serial interface (shown as something with nRF52840).
+
+The UI will show you the possible options.
+
+__Important:__ The settings are not saved automatically, you need to execute __Store new settings on the device__!
+
+### Currently implemented settings
+
+| Command                                     | Shortcode (serial command) | Type & Value Range                                   | Notes                                                        |
+| ------------------------------------------- | -------------------------- | ---------------------------------------------------- | ------------------------------------------------------------ |
+| Store new settings on the device            | s                          | Action                                               | Always trigger this action to save changes                   |
+| Inactivity time [ms]                        | i                          | Integer, 30000-600000 [ms] (30s - 10min)             | Time before the BleenyButton enters the power-down mode. Will be reset by pressing the button or an established BLE connection |
+| Connected device                            | d                          | Info                                                 | This information heavily depends on the BLE stack of the host device, it is not always available, even if a device is connected! |
+| Reset paired devices                        | r                          | Action                                               | Reset the BLE pairings                                       |
+| Key 1                                       | 1                          | Selection: Space, Enter, 1, 2, Tab, F1, F2, F13, F14 | Select the keyboard key to be send when pressing the main button |
+| Key 2                                       | 2                          | Selection: Space, Enter, 1, 2, Tab, F1, F2, F13, F14 | If a second button is connected, this key will be sent.      |
+| Print out supported commands and build date | ?                          | Action                                               | Print out possible commands                                  |
+
+The following commands are available when building with output enabled:
+
+| Command                   | Shortcode (serial command) | Type & Value Range              | Notes                                                        |
+| ------------------------- | -------------------------- | ------------------------------- | ------------------------------------------------------------ |
+| Trigger output            | c                          | Action                          | Trigger the output, either click or toggle (see Output mode) |
+| Output mode               | o                          | Selection: click, toggle        | Either click the output for 0.1s or toggle when the button is pressed (or command "Trigger output" is sent) |
+| Mode 1 - Tremor timeout   | t                          | Integer, 300-5000 [ms] (0.3-5s) | Defines the delay before another output trigger can happen, used in Mode 1 |
+| Mode 3 - Auto click delay | p                          | Integer, 2-600 [s]              | After the output is triggered, this time will pass until the output is triggered again. |
+| Startup Mode              | m                          | Integer, 1-3                    | Select the output mode on startup. The mode can be changed with the second button on the bottom (PIN_MODE) |
+
+### Output mode description
+
+#### Mode 1 - tremor timeout
+
+When pressing the button, it is locked for a given timeout until another press on the button is triggering the output.
+
+#### Mode 2 - straight
+
+Button presses are directly mapped to the output. Note: each edge (press / release) triggers the output (either click or toggle).
+
+#### Mode 3 - auto click
+
+A button press triggers the output. Afterwards, the button is locked for a given timeout, then another automatic trigger of the output happens.
+
  # Acknowledgement
+
 This work has been accomplished at the UAS Technikum Wien in course of the R&D-project [InDiKo](https://www.technikum-wien.at/en/research-projects/indiko/) (MA23 project 38-09), which is supported by the [City of Vienna](https://www.wien.gv.at/kontakte/ma23/index.html).
 
 FreeCAD project, output addition, XIAO board adaption and software bugfixes are done by Benjamin Aigner, [Assistronik](https://assistronik.info)
