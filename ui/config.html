@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Microcontroller Configurator</title>
+
+    <style>
+        @font-face {
+            font-family: "CustomFont";
+            src: url("Jost-Bold.ttf") format("truetype");
+        }
+
+        body {
+            font-family: "CustomFont", Arial, sans-serif;
+            margin: 30px;
+            background: #f7f7f7;
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        header img {
+            height: 60px;
+            margin-right: 20px;
+        }
+
+        h1 {
+            margin: 0;
+        }
+
+        button {
+            padding: 6px 14px;
+            cursor: pointer;
+        }
+
+        .config-item {
+            background: #ffffff;
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+
+        .description {
+            font-size: 0.9em;
+            color: #555;
+            margin-bottom: 6px;
+        }
+
+        #status {
+            margin-top: 15px;
+            font-style: italic;
+            white-space: pre-line;
+        }
+    
+    </style>
+</head>
+
+<body>
+
+<header>
+    <img src="logo.png" alt="Logo">
+    <h1 id="deviceName">Disconnected</h1>
+</header>
+
+<button id="connectBtn">Connect</button>
+
+<div id="configArea"></div>
+<div id="status">Idle</div>
+
+<script>
+let port, reader, writer;
+let listening = false;
+let readBuffer = "";
+let lineQueue = [];
+let parameters = [];
+
+const configArea = document.getElementById("configArea");
+const statusEl = document.getElementById("status");
+const deviceNameEl = document.getElementById("deviceName");
+
+document.getElementById("connectBtn").addEventListener("click", connect);
+
+/* ================= SERIAL CORE ================= */
+
+async function connect() {
+    try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+
+        const textDecoder = new TextDecoderStream();
+        port.readable.pipeTo(textDecoder.writable);
+
+        reader = textDecoder.readable.getReader();
+        writer = port.writable.getWriter();
+
+        startListening();
+
+        statusEl.textContent = "Connected, requesting command list…";
+        await sendLine("?");
+
+        const lines = await collectLines(200);
+        parseResponse(lines);
+        renderUI();
+
+        statusEl.textContent = "Ready\n";
+
+    } catch (err) {
+        statusEl.textContent = "Connection failed: " + err;
+    }
+}
+
+async function startListening() {
+    if (listening) return;
+    listening = true;
+
+    while (listening) {
+        try {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            value.split("").forEach(ch => {
+                readBuffer += ch;
+                if (ch === "\n") {
+                    const line = readBuffer.trim();
+                    readBuffer = "";
+                    if (line) {
+                        console.log(line);
+                        lineQueue.push(line);
+                        statusEl.textContent += "Received:" + line + "\n";
+                    }
+                }
+            });
+
+        } catch (e) {
+            console.warn("Serial read error:", e);
+            listening = false;
+            break;
+        }
+    }
+}
+
+async function collectLines(idleMs = 150) {
+    return new Promise(resolve => {
+        let lastLen = lineQueue.length;
+
+        const timer = setInterval(() => {
+            if (lineQueue.length !== lastLen) {
+                lastLen = lineQueue.length;
+                return;
+            }
+
+            if (lineQueue.length) {
+                clearInterval(timer);
+                const lines = [...lineQueue];
+                lineQueue.length = 0;
+                resolve(lines);
+            }
+        }, idleMs);
+    });
+}
+
+async function sendLine(text) {
+    await writer.write(new TextEncoder().encode(text + "\n"));
+}
+
+/* ================= PROTOCOL PARSING ================= */
+
+function parseResponse(lines) {
+    parameters = [];
+    if (!lines.length) return;
+
+    deviceNameEl.textContent = lines[0];
+
+    lines.slice(1).forEach(line => {
+        const parts = line.split(":");
+        if (parts.length < 3) return;
+
+        parameters.push({
+            cmd: parts[0],
+            type: parts[1].replace(/[<>]/g, ""),
+            description: parts[2],
+            extra: parts[3] || null,
+            current: parts[4] || null
+        });
+    });
+}
+
+/* ================= UI ================= */
+
+function renderUI() {
+    configArea.innerHTML = "";
+
+    parameters.forEach(p => {
+        const div = document.createElement("div");
+        div.className = "config-item";
+
+        const title = document.createElement("strong");
+        title.textContent = p.cmd;
+
+        const desc = document.createElement("div");
+        desc.className = "description";
+        desc.textContent = p.description;
+
+        div.appendChild(title);
+        div.appendChild(desc);
+
+        let el = null;
+        
+        const btn = document.createElement("button");
+        btn.textContent = "Update";
+
+        switch (p.type) {
+            case "int":
+                el = document.createElement("input");
+                el.type = "number";
+                applyRange(el, p.extra);
+                if(p.current) el.value = p.current;
+                btn.addEventListener("click", () => sendValue(p.cmd, el.value));
+                break;
+
+            case "float":
+                el = document.createElement("input");
+                el.type = "number";
+                el.step = "any";
+                applyRange(el, p.extra);
+                if(p.current) el.value = p.current;
+                btn.addEventListener("click", () => sendValue(p.cmd, el.value));
+                break;
+
+            case "bool":
+                el = document.createElement("input");
+                el.type = "checkbox";
+                if(p.current) el.checked = 1;
+                btn.addEventListener("click", () => sendValue(p.cmd, el.checked ? 1 : 0));
+                break;
+
+            case "enum":
+                el = document.createElement("select");
+                p.extra.split(",").forEach(v => {
+                    const opt = document.createElement("option");
+                    opt.value = v;
+                    opt.textContent = v;
+                    el.appendChild(opt);
+                });
+                if(p.current) el.selectedIndex = p.current;
+                btn.addEventListener("click", () => sendValue(p.cmd, el.selectedIndex));
+                break;
+
+            case "string":
+                el = document.createElement("input");
+                el.type = "text";
+                if(p.current) el.value = p.current;
+                btn.addEventListener("click", () => sendValue(p.cmd, el.value));
+                break;
+
+            case "none":
+                btn.textContent = "Execute";
+                btn.addEventListener("click", () => sendLine(p.cmd));
+                break;
+            case "info":
+                btn.style.visibility = "hidden";
+                break;
+        }
+
+        if(btn) div.appendChild(btn);
+
+        if (el) {
+            div.appendChild(el);
+        }
+
+        configArea.appendChild(div);
+    });
+}
+
+function applyRange(input, range) {
+    if (!range) return;
+    const [min, max] = range.split("-");
+    input.min = min;
+    input.max = max;
+    input.placeholder = `${min} – ${max}`;
+}
+
+async function sendValue(cmd, value) {
+    if (value === "" || value === undefined) return;
+    await sendLine(`${cmd}:${value}`);
+    statusEl.textContent += `Sent ${cmd}:${value}` + "\n";
+}
+</script>
+
+</body>
+</html>
