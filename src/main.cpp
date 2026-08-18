@@ -60,7 +60,7 @@ void printHelp();
   //different modes for the output
   int mode = 0; 
   // how many modes are used
-  #define MODE_MAX 3
+  #define MODE_MAX 4
   //pin for the mode switch button
   uint8_t pin_mode = PIN_MODE; 
   //output mode: 0: click the output on each action; 1: toggle the output on each action
@@ -472,7 +472,7 @@ void parseCommand(char *buf) {
       case 'm':
         Serial.print("Prev: "); Serial.println(mode+1);
         newValue = String(buf+2).toInt();
-        if(newValue >= 1 && newValue <= 3) mode = newValue-1;
+        if(newValue >= 1 && newValue <= 4) mode = newValue-1;
         Serial.print("New: "); Serial.println(mode+1);
       break;
       case 'c':
@@ -518,7 +518,7 @@ void printHelp() {
   Serial.println("o:<enum>:Output mode:click,toggle");
   Serial.print("t:<int>:Mode 1 - Tremor Timeout [ms]:300-5000:"); Serial.println(tremor_timeout_ms);
   Serial.print("p:<int>:Mode 3 - Auto-Pause Timeout [s]:2-600:"); Serial.println(pause_timeout_s);
-  Serial.print("m:<int>:Startup Mode:1-3:"); Serial.println(mode+1);
+  Serial.print("m:<int>:Startup Mode:1-4:"); Serial.println(mode+1);
   #endif
   Serial.println("?:<none>:Print out supported commands and build date");
   //examples for more commands (+types)
@@ -585,6 +585,10 @@ void handleOutput(bool pressed, bool released) {
         lastAction = millis();
       }
 
+    break;
+
+    //output disabled: ignore all button events
+    case 3:
     break;
 
     default: break;
