@@ -54,7 +54,7 @@ void printHelp();
 
 /******* output to 3.5mm jackplug ******/
 //use output functions ('c' command)
-#define OUTPUT_ACTIVE
+//#define OUTPUT_ACTIVE
 
 #ifdef OUTPUT_ACTIVE
   //latching 1 coil relay on P0.02 (D18) & P0.29 (D20)
