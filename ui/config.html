@@ -184,7 +184,8 @@ function parseResponse(lines) {
             type: parts[1].replace(/[<>]/g, ""),
             description: parts[2],
             extra: parts[3] || null,
-            current: parts[4] || null
+            current: parts[4] || null,
+            current2: parts[5] || null
         });
     });
 }
@@ -210,7 +211,7 @@ function renderUI() {
 
         let el = null;
         
-        const btn = document.createElement("button");
+        let btn = document.createElement("button");
         btn.textContent = "Update";
 
         switch (p.type) {
@@ -250,34 +251,69 @@ function renderUI() {
                 btn.addEventListener("click", () => sendValue(p.cmd, el.selectedIndex));
                 break;
 
-            case "keycombo": {
-                el = document.createElement("input");
-                el.type = "text";
-                el.readOnly = true;
-                el.placeholder = "Click here, then press a key combination";
-                el.style.cssText = "cursor:pointer;min-width:240px;";
-                let kc = parseInt(p.extra) || 0;
-                let km = parseInt(p.current) || 0;
-                if (kc) el.value = formatKeyCombo(kc, km);
-                el.addEventListener("focus", () => { el.style.outline = "2px solid #0078d4"; });
-                el.addEventListener("blur",  () => { el.style.outline = ""; });
-                el.addEventListener("keydown", (e) => {
+            case "buttonaction": {
+                const ACTION_LABELS = ["Key press", "Left click", "Right click", "Scroll up", "Scroll down"];
+                let action = parseInt(p.extra)   || 0;
+                let kc     = parseInt(p.current) || 0;
+                let km     = parseInt(p.current2) || 0;
+
+                const actionSel = document.createElement("select");
+                ACTION_LABELS.forEach((name, idx) => {
+                    const opt = document.createElement("option");
+                    opt.value = idx;
+                    opt.textContent = name;
+                    actionSel.appendChild(opt);
+                });
+                actionSel.value = action;
+                actionSel.style.margin = "0 6px";
+
+                const keyInput = document.createElement("input");
+                keyInput.type = "text";
+                keyInput.readOnly = true;
+                keyInput.placeholder = "Click here, then press a key combination";
+                keyInput.style.cssText = "cursor:pointer;min-width:240px;";
+                if (kc) keyInput.value = formatKeyCombo(kc, km);
+
+                const syncKeyInputState = () => {
+                    const isKey = parseInt(actionSel.value) === 0;
+                    keyInput.disabled = !isKey;
+                    keyInput.style.opacity = isKey ? "1" : "0.4";
+                    keyInput.style.cursor  = isKey ? "pointer" : "default";
+                };
+                syncKeyInputState();
+
+                actionSel.addEventListener("change", () => {
+                    action = parseInt(actionSel.value);
+                    syncKeyInputState();
+                });
+                keyInput.addEventListener("focus", () => { if (!keyInput.disabled) keyInput.style.outline = "2px solid #0078d4"; });
+                keyInput.addEventListener("blur",  () => { keyInput.style.outline = ""; });
+                keyInput.addEventListener("keydown", (e) => {
+                    if (keyInput.disabled) return;
                     e.preventDefault();
                     if (["Control","Alt","Shift","Meta"].includes(e.key)) return;
                     const hid = browserCodeToHID(e.code);
-                    if (hid === undefined) { el.value = "(unsupported: " + e.code + ")"; return; }
+                    if (hid === undefined) { keyInput.value = "(unsupported: " + e.code + ")"; return; }
                     let mod = 0;
                     if (e.ctrlKey)  mod |= 0x01;
                     if (e.shiftKey) mod |= 0x02;
                     if (e.altKey)   mod |= 0x04;
                     if (e.metaKey)  mod |= 0x08;
                     kc = hid; km = mod;
-                    el.value = formatKeyCombo(hid, mod);
+                    keyInput.value = formatKeyCombo(hid, mod);
                 });
                 btn.addEventListener("click", () => {
-                    sendLine(p.cmd + ":" + kc + ":" + km);
-                    statusEl.textContent += "Sent key combo: " + el.value + "\n";
+                    action = parseInt(actionSel.value);
+                    sendLine(p.cmd + ":" + action + ":" + kc + ":" + km);
+                    const label = action === 0 ? "Key: " + keyInput.value : ACTION_LABELS[action];
+                    statusEl.textContent += "Sent button action: " + label + "\n";
                 });
+
+                // Custom ordering: Update btn → action select → key input
+                div.appendChild(btn);
+                div.appendChild(actionSel);
+                div.appendChild(keyInput);
+                btn = null; el = null; // prevent generic re-append
                 break;
             }
 

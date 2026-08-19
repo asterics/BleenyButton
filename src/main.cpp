@@ -34,6 +34,8 @@ uint8_t button_map[NUM_BUTTONS] = {BUTTON1, BUTTON2, BUTTON3, BUTTON4};
 uint8_t button_keycodes[NUM_BUTTONS] = {HID_KEY_SPACE, HID_KEY_ENTER, HID_KEY_1, HID_KEY_2};
 // HID modifier byte per button (Ctrl=0x01, Shift=0x02, Alt=0x04, GUI=0x08; OR for combinations)
 uint8_t button_modifiers[NUM_BUTTONS] = {0, 0, 0, 0};
+// Action type per button: 0=key press, 1=left click, 2=right click, 3=scroll up, 4=scroll down
+uint8_t button_actions[NUM_BUTTONS] = {0, 0, 0, 0};
 uint8_t buttonStates = 0;
 
 // Multi-key state (up to 6 simultaneous keys)
@@ -52,7 +54,7 @@ void printHelp();
 
 /******* output to 3.5mm jackplug ******/
 //use output functions ('c' command)
-//#define OUTPUT_ACTIVE
+#define OUTPUT_ACTIVE
 
 #ifdef OUTPUT_ACTIVE
   //latching 1 coil relay on P0.02 (D18) & P0.29 (D20)
@@ -282,8 +284,16 @@ void loop()
       #ifdef OUTPUT_ACTIVE
         if(i == 0) handleOutput(true,false);
       #endif
-      addActiveKey(button_keycodes[i]);
-      { uint8_t mods = 0; for (uint8_t j = 0; j < NUM_BUTTONS; j++) if (buttonStates & (1 << j)) mods |= button_modifiers[j]; blehid.keyboardReport(mods, active_keys); }
+      switch (button_actions[i]) {
+        case 0: // key press
+          addActiveKey(button_keycodes[i]);
+          { uint8_t mods = 0; for (uint8_t j = 0; j < NUM_BUTTONS; j++) if (buttonStates & (1 << j)) mods |= button_modifiers[j]; blehid.keyboardReport(mods, active_keys); }
+          break;
+        case 1: blehid.mouseButtonPress(MOUSE_BUTTON_LEFT);  break;
+        case 2: blehid.mouseButtonPress(MOUSE_BUTTON_RIGHT); break;
+        case 3: blehid.mouseScroll( 1); break;
+        case 4: blehid.mouseScroll(-1); break;
+      }
       // if (ENABLE_ACTIVITY_LED ) dToggle(LED_R);
       if (ENABLE_DEBUG_OUTPUT) Serial.println("Button pressed");
     } else if ( !pressed && (buttonStates & (1 << i)) ) {
@@ -293,8 +303,16 @@ void loop()
       #ifdef OUTPUT_ACTIVE
         if(i == 0) handleOutput(false,true);
       #endif
-      removeActiveKey(button_keycodes[i]);
-      { uint8_t mods = 0; for (uint8_t j = 0; j < NUM_BUTTONS; j++) if (buttonStates & (1 << j)) mods |= button_modifiers[j]; blehid.keyboardReport(mods, active_keys); }
+      switch (button_actions[i]) {
+        case 0: // key release
+          removeActiveKey(button_keycodes[i]);
+          { uint8_t mods = 0; for (uint8_t j = 0; j < NUM_BUTTONS; j++) if (buttonStates & (1 << j)) mods |= button_modifiers[j]; blehid.keyboardReport(mods, active_keys); }
+          break;
+        case 1:
+        case 2: blehid.mouseButtonRelease(); break;
+        case 3:
+        case 4: break; // scroll: no action on release
+      }
       //if (ENABLE_ACTIVITY_LED ) dToggle(LED_R);
       if (ENABLE_DEBUG_OUTPUT) Serial.println("Button released");
     }
@@ -357,9 +375,9 @@ bool storeSettings() {
   snprintf(buffer,MAX_PARAM_LEN,"i:%d\n",sleep_timeout_ms);
   file.write(buffer);
 
-  //save keycodes (1-indexed to match serial command chars '1' and '2')
+  //save button actions and keycodes (1-indexed to match serial command chars '1' and '2')
   for(int i = 0; i<2; i++) {
-    snprintf(buffer,MAX_PARAM_LEN,"%d:%d:%d\n", i+1, button_keycodes[i], button_modifiers[i]);
+    snprintf(buffer,MAX_PARAM_LEN,"%d:%d:%d:%d\n", i+1, button_actions[i], button_keycodes[i], button_modifiers[i]);
     file.write(buffer);
   }
   
@@ -431,18 +449,23 @@ void parseCommand(char *buf) {
       Serial.print("New: "); Serial.println(sleep_timeout_ms);
     break;
 
-    //handle button<->key code assignment (format: N:<keycode>:<modifier>)
+    //handle button action assignment (format: N:<action>:<keycode>:<modifier>)
+    // actions: 0=key press, 1=left click, 2=right click, 3=scroll up, 4=scroll down
     case '1':
     case '2':
     {
       uint8_t btnIdx = buf[0] - '1';
-      char *sep = strchr(buf+2, ':');
-      uint8_t newKeycode  = (uint8_t)String(buf+2).toInt();
-      uint8_t newModifier = sep ? (uint8_t)String(sep+1).toInt() : 0;
-      Serial.print("Prev: "); Serial.print(button_keycodes[btnIdx]); Serial.print(":"); Serial.println(button_modifiers[btnIdx]);
+      char *sep1 = strchr(buf+2, ':');
+      char *sep2 = sep1 ? strchr(sep1+1, ':') : nullptr;
+      uint8_t newAction   = (uint8_t)String(buf+2).toInt();
+      uint8_t newKeycode  = sep1 ? (uint8_t)String(sep1+1).toInt() : 0;
+      uint8_t newModifier = sep2 ? (uint8_t)String(sep2+1).toInt() : 0;
+      if (newAction > 4) newAction = 0;
+      Serial.print("Prev: "); Serial.print(button_actions[btnIdx]); Serial.print(":"); Serial.print(button_keycodes[btnIdx]); Serial.print(":"); Serial.println(button_modifiers[btnIdx]);
+      button_actions[btnIdx]   = newAction;
       button_keycodes[btnIdx]  = newKeycode;
       button_modifiers[btnIdx] = newModifier;
-      Serial.print("New: "); Serial.print(button_keycodes[btnIdx]); Serial.print(":"); Serial.println(button_modifiers[btnIdx]);
+      Serial.print("New: "); Serial.print(button_actions[btnIdx]); Serial.print(":"); Serial.print(button_keycodes[btnIdx]); Serial.print(":"); Serial.println(button_modifiers[btnIdx]);
     }
     break;
     
@@ -510,8 +533,8 @@ void printHelp() {
   Serial.print("i:<int>:Inactivity time [ms]:30000-600000:"); Serial.println(sleep_timeout_ms);
   Serial.print("d:<info>:Connected device::"); Serial.println(central_name);
   Serial.println("r:<none>:Reset paired devices");
-  Serial.print("1:<keycombo>:Key 1:"); Serial.print(button_keycodes[0]); Serial.print(":"); Serial.println(button_modifiers[0]);
-  Serial.print("2:<keycombo>:Key 2:"); Serial.print(button_keycodes[1]); Serial.print(":"); Serial.println(button_modifiers[1]);
+  Serial.print("1:<buttonaction>:Button 1:"); Serial.print(button_actions[0]); Serial.print(":"); Serial.print(button_keycodes[0]); Serial.print(":"); Serial.println(button_modifiers[0]);
+  Serial.print("2:<buttonaction>:Button 2:"); Serial.print(button_actions[1]); Serial.print(":"); Serial.print(button_keycodes[1]); Serial.print(":"); Serial.println(button_modifiers[1]);
 
   #ifdef OUTPUT_ACTIVE
   Serial.println("c:<none>:Trigger the output");
