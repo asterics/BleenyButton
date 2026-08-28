@@ -528,7 +528,10 @@ void printHelp() {
   char central_name[32] = { 0 };
   Bluefruit.Connection(Bluefruit.connHandle())->getPeerName(central_name, sizeof(central_name));
   
-  Serial.println(__DATE__);
+  Serial.print(__DATE__);
+  uint8_t mac[6];
+  Bluefruit.getAddr(mac);
+  Serial.printf(" - %02X%02X\r\n",mac[4],mac[5]);
   Serial.println("s:<none>:Store new settings on the device");
   Serial.print("i:<int>:Inactivity time [ms]:30000-600000:"); Serial.println(sleep_timeout_ms);
   Serial.print("d:<info>:Connected device::"); Serial.println(central_name);
