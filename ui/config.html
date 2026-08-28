@@ -184,7 +184,8 @@ function parseResponse(lines) {
             type: parts[1].replace(/[<>]/g, ""),
             description: parts[2],
             extra: parts[3] || null,
-            current: parts[4] || null
+            current: parts[4] || null,
+            current2: parts[5] || null
         });
     });
 }
@@ -210,7 +211,7 @@ function renderUI() {
 
         let el = null;
         
-        const btn = document.createElement("button");
+        let btn = document.createElement("button");
         btn.textContent = "Update";
 
         switch (p.type) {
@@ -250,6 +251,101 @@ function renderUI() {
                 btn.addEventListener("click", () => sendValue(p.cmd, el.selectedIndex));
                 break;
 
+            case "buttonaction": {
+                const ACTION_LABELS = ["Key press", "Left click", "Right click", "Scroll up", "Scroll down"];
+                let action = parseInt(p.extra)    || 0;
+                let kc     = parseInt(p.current)  || 0;
+                let km     = parseInt(p.current2) || 0;
+
+                const actionSel = document.createElement("select");
+                ACTION_LABELS.forEach((name, idx) => {
+                    const opt = document.createElement("option");
+                    opt.value = idx;
+                    opt.textContent = name;
+                    actionSel.appendChild(opt);
+                });
+                actionSel.value = action;
+                actionSel.style.margin = "0 6px";
+
+                const keyInput = document.createElement("input");
+                keyInput.type = "text";
+                keyInput.readOnly = true;
+                keyInput.style.cssText = "min-width:240px;";
+                if (kc) keyInput.value = formatKeyCombo(kc, km);
+
+                // Auto-detect checkbox
+                const autoCheck = document.createElement("input");
+                autoCheck.type = "checkbox";
+                autoCheck.checked = true;
+                autoCheck.id = "autodetect_" + p.cmd;
+                autoCheck.style.marginLeft = "8px";
+                const autoLabel = document.createElement("label");
+                autoLabel.htmlFor = autoCheck.id;
+                autoLabel.textContent = " auto detect";
+                autoLabel.style.cssText = "font-size:0.85em;cursor:pointer;user-select:none;";
+
+                const syncKeyInputState = () => {
+                    const isKey  = parseInt(actionSel.value) === 0;
+                    const isAuto = autoCheck.checked;
+                    keyInput.disabled = !isKey;
+                    if (isKey) {
+                        keyInput.readOnly = isAuto;
+                        keyInput.style.cursor = isAuto ? "pointer" : "text";
+                        keyInput.placeholder = isAuto
+                            ? "Click here, then press a key combination"
+                            : "Type e.g. Ctrl+Alt+Del";
+                    }
+                    keyInput.style.opacity = isKey ? "1" : "0.4";
+                    autoCheck.disabled = !isKey;
+                    autoLabel.style.opacity = isKey ? "1" : "0.4";
+                };
+                syncKeyInputState();
+
+                actionSel.addEventListener("change", () => {
+                    action = parseInt(actionSel.value);
+                    syncKeyInputState();
+                });
+                autoCheck.addEventListener("change", syncKeyInputState);
+
+                keyInput.addEventListener("focus", () => { if (!keyInput.disabled) keyInput.style.outline = "2px solid #0078d4"; });
+                keyInput.addEventListener("blur",  () => { keyInput.style.outline = ""; });
+                keyInput.addEventListener("keydown", (e) => {
+                    if (keyInput.disabled || !keyInput.readOnly) return; // manual mode: let browser handle typing
+                    e.preventDefault();
+                    if (["Control","Alt","Shift","Meta"].includes(e.key)) return;
+                    const hid = browserCodeToHID(e.code);
+                    if (hid === undefined) { keyInput.value = "(unsupported: " + e.code + ")"; return; }
+                    let mod = 0;
+                    if (e.ctrlKey)  mod |= 0x01;
+                    if (e.shiftKey) mod |= 0x02;
+                    if (e.altKey)   mod |= 0x04;
+                    if (e.metaKey)  mod |= 0x08;
+                    kc = hid; km = mod;
+                    keyInput.value = formatKeyCombo(hid, mod);
+                });
+
+                btn.addEventListener("click", () => {
+                    action = parseInt(actionSel.value);
+                    if (action === 0 && !autoCheck.checked) {
+                        const parsed = parseKeyComboText(keyInput.value);
+                        kc = parsed.keycode; km = parsed.modifier;
+                        if (kc) keyInput.value = formatKeyCombo(kc, km); // normalise display
+                    }
+                    sendLine(p.cmd + ":" + action + ":" + kc + ":" + km);
+                    const label = action === 0 ? "Key: " + keyInput.value : ACTION_LABELS[action];
+                    statusEl.textContent += "Sent button action: " + label + "\n";
+                });
+
+                // Custom ordering: Update btn → action select → key input → checkbox → label
+                div.appendChild(btn);
+                div.appendChild(actionSel);
+                div.appendChild(keyInput);
+                div.appendChild(autoCheck);
+                div.appendChild(autoLabel);
+                btn = null; el = null; // prevent generic re-append
+                break;
+            }
+
             case "string":
                 el = document.createElement("input");
                 el.type = "text";
@@ -288,6 +384,102 @@ async function sendValue(cmd, value) {
     if (value === "" || value === undefined) return;
     await sendLine(`${cmd}:${value}`);
     statusEl.textContent += `Sent ${cmd}:${value}` + "\n";
+}
+
+/* ================= HID KEY HELPERS ================= */
+
+const HID_KEY_MAP = {
+    'KeyA':{hid:0x04,name:'A'}, 'KeyB':{hid:0x05,name:'B'}, 'KeyC':{hid:0x06,name:'C'},
+    'KeyD':{hid:0x07,name:'D'}, 'KeyE':{hid:0x08,name:'E'}, 'KeyF':{hid:0x09,name:'F'},
+    'KeyG':{hid:0x0A,name:'G'}, 'KeyH':{hid:0x0B,name:'H'}, 'KeyI':{hid:0x0C,name:'I'},
+    'KeyJ':{hid:0x0D,name:'J'}, 'KeyK':{hid:0x0E,name:'K'}, 'KeyL':{hid:0x0F,name:'L'},
+    'KeyM':{hid:0x10,name:'M'}, 'KeyN':{hid:0x11,name:'N'}, 'KeyO':{hid:0x12,name:'O'},
+    'KeyP':{hid:0x13,name:'P'}, 'KeyQ':{hid:0x14,name:'Q'}, 'KeyR':{hid:0x15,name:'R'},
+    'KeyS':{hid:0x16,name:'S'}, 'KeyT':{hid:0x17,name:'T'}, 'KeyU':{hid:0x18,name:'U'},
+    'KeyV':{hid:0x19,name:'V'}, 'KeyW':{hid:0x1A,name:'W'}, 'KeyX':{hid:0x1B,name:'X'},
+    'KeyY':{hid:0x1C,name:'Y'}, 'KeyZ':{hid:0x1D,name:'Z'},
+    'Digit1':{hid:0x1E,name:'1'}, 'Digit2':{hid:0x1F,name:'2'}, 'Digit3':{hid:0x20,name:'3'},
+    'Digit4':{hid:0x21,name:'4'}, 'Digit5':{hid:0x22,name:'5'}, 'Digit6':{hid:0x23,name:'6'},
+    'Digit7':{hid:0x24,name:'7'}, 'Digit8':{hid:0x25,name:'8'}, 'Digit9':{hid:0x26,name:'9'},
+    'Digit0':{hid:0x27,name:'0'},
+    'Enter':{hid:0x28,name:'Enter'}, 'Escape':{hid:0x29,name:'Esc'}, 'Backspace':{hid:0x2A,name:'Backspace'},
+    'Tab':{hid:0x2B,name:'Tab'}, 'Space':{hid:0x2C,name:'Space'},
+    'Minus':{hid:0x2D,name:'-'}, 'Equal':{hid:0x2E,name:'='}, 'BracketLeft':{hid:0x2F,name:'['},
+    'BracketRight':{hid:0x30,name:']'}, 'Backslash':{hid:0x31,name:'\\'},
+    'Semicolon':{hid:0x33,name:';'}, 'Quote':{hid:0x34,name:"'"}, 'Backquote':{hid:0x35,name:'`'},
+    'Comma':{hid:0x36,name:','}, 'Period':{hid:0x37,name:'.'}, 'Slash':{hid:0x38,name:'/'},
+    'CapsLock':{hid:0x39,name:'CapsLock'},
+    'F1':{hid:0x3A,name:'F1'},   'F2':{hid:0x3B,name:'F2'},   'F3':{hid:0x3C,name:'F3'},
+    'F4':{hid:0x3D,name:'F4'},   'F5':{hid:0x3E,name:'F5'},   'F6':{hid:0x3F,name:'F6'},
+    'F7':{hid:0x40,name:'F7'},   'F8':{hid:0x41,name:'F8'},   'F9':{hid:0x42,name:'F9'},
+    'F10':{hid:0x43,name:'F10'}, 'F11':{hid:0x44,name:'F11'}, 'F12':{hid:0x45,name:'F12'},
+    'PrintScreen':{hid:0x46,name:'PrtSc'}, 'ScrollLock':{hid:0x47,name:'ScrLk'}, 'Pause':{hid:0x48,name:'Pause'},
+    'Insert':{hid:0x49,name:'Insert'}, 'Home':{hid:0x4A,name:'Home'}, 'PageUp':{hid:0x4B,name:'PgUp'},
+    'Delete':{hid:0x4C,name:'Delete'}, 'End':{hid:0x4D,name:'End'}, 'PageDown':{hid:0x4E,name:'PgDn'},
+    'ArrowRight':{hid:0x4F,name:'→'}, 'ArrowLeft':{hid:0x50,name:'←'},
+    'ArrowDown':{hid:0x51,name:'↓'}, 'ArrowUp':{hid:0x52,name:'↑'},
+    'NumLock':{hid:0x53,name:'NumLock'},
+    'NumpadDivide':{hid:0x54,name:'Num/'}, 'NumpadMultiply':{hid:0x55,name:'Num*'},
+    'NumpadSubtract':{hid:0x56,name:'Num-'}, 'NumpadAdd':{hid:0x57,name:'Num+'},
+    'NumpadEnter':{hid:0x58,name:'NumEnter'},
+    'Numpad1':{hid:0x59,name:'Num1'}, 'Numpad2':{hid:0x5A,name:'Num2'}, 'Numpad3':{hid:0x5B,name:'Num3'},
+    'Numpad4':{hid:0x5C,name:'Num4'}, 'Numpad5':{hid:0x5D,name:'Num5'}, 'Numpad6':{hid:0x5E,name:'Num6'},
+    'Numpad7':{hid:0x5F,name:'Num7'}, 'Numpad8':{hid:0x60,name:'Num8'}, 'Numpad9':{hid:0x61,name:'Num9'},
+    'Numpad0':{hid:0x62,name:'Num0'}, 'NumpadDecimal':{hid:0x63,name:'Num.'},
+    'F13':{hid:0x68,name:'F13'}, 'F14':{hid:0x69,name:'F14'}, 'F15':{hid:0x6A,name:'F15'},
+    'F16':{hid:0x6B,name:'F16'}, 'F17':{hid:0x6C,name:'F17'}, 'F18':{hid:0x6D,name:'F18'},
+    'F19':{hid:0x6E,name:'F19'}, 'F20':{hid:0x6F,name:'F20'}, 'F21':{hid:0x70,name:'F21'},
+    'F22':{hid:0x71,name:'F22'}, 'F23':{hid:0x72,name:'F23'}, 'F24':{hid:0x73,name:'F24'},
+};
+
+const HID_CODE_NAMES = Object.fromEntries(Object.values(HID_KEY_MAP).map(v => [v.hid, v.name]));
+
+function browserCodeToHID(code) { return HID_KEY_MAP[code]?.hid; }
+
+function hidKeycodeToName(hid) {
+    return HID_CODE_NAMES[hid] || ('0x' + hid.toString(16).toUpperCase().padStart(2, '0'));
+}
+
+function formatKeyCombo(keycode, modifier) {
+    if (!keycode) return "(none)";
+    const mods = [];
+    if (modifier & 0x11) mods.push('Ctrl');
+    if (modifier & 0x22) mods.push('Shift');
+    if (modifier & 0x44) mods.push('Alt');
+    if (modifier & 0x88) mods.push('Win');
+    return [...mods, hidKeycodeToName(keycode)].join('+');
+}
+
+// Reverse name→HID map for manual text parsing
+const HID_NAME_TO_CODE = {};
+Object.values(HID_KEY_MAP).forEach(v => { HID_NAME_TO_CODE[v.name.toLowerCase()] = v.hid; });
+const HID_TEXT_ALIASES = {
+    'delete':0x4C,'del':0x4C,'escape':0x29,'insert':0x49,'ins':0x49,
+    'pageup':0x4B,'pgup':0x4B,'page up':0x4B,'pagedown':0x4E,'pgdn':0x4E,'page down':0x4E,
+    'up':0x52,'down':0x51,'left':0x50,'right':0x4F,
+    'space':0x2C,'enter':0x28,'return':0x28,'tab':0x2B,'backspace':0x2A,'bs':0x2A,
+    'capslock':0x39,'caps':0x39,'numlock':0x53,'scrolllock':0x47,'scrlk':0x47,
+    'printscreen':0x46,'prtsc':0x46,'pause':0x48,'break':0x48,
+};
+
+function nameToHID(name) {
+    const lower = name.trim().toLowerCase();
+    return HID_NAME_TO_CODE[lower] || HID_TEXT_ALIASES[lower] || 0;
+}
+
+// Parse a manually typed combo like "Ctrl+Alt+Del" into {keycode, modifier}
+function parseKeyComboText(text) {
+    let mod = 0, keycode = 0;
+    text.split('+').forEach(part => {
+        const upper = part.trim().toUpperCase();
+        if (upper === 'CTRL' || upper === 'CONTROL')                      { mod |= 0x01; return; }
+        if (upper === 'SHIFT')                                             { mod |= 0x02; return; }
+        if (upper === 'ALT')                                               { mod |= 0x04; return; }
+        if (upper === 'WIN' || upper === 'META' || upper === 'GUI' || upper === 'CMD') { mod |= 0x08; return; }
+        const hid = nameToHID(part);
+        if (hid) keycode = hid;
+    });
+    return { keycode, modifier: mod };
 }
 </script>
 

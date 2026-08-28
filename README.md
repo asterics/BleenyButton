@@ -95,6 +95,14 @@ Press __connect__ and select the BleenyButton serial interface (shown as somethi
 
 The UI will show you the possible options.
 
+### Key combination assignment
+
+Key 1 and Key 2 support any key or key combination (e.g. `Alt+H`, `Ctrl+Shift+Z`, `F13`). In the web UI, click the **Key 1** or **Key 2** field and press the desired key (with any modifiers held down) — the field auto-detects and displays the combination. Click **Update** to send it to the device, then **Store new settings** to save.
+
+The serial command format is `1:<keycode>:<modifier>` where both values are decimal USB HID codes (e.g. `1:11:4` sets Key 1 to `Alt+H`). Modifier bits: Ctrl=0x01, Shift=0x02, Alt=0x04, GUI/Win=0x08.
+
+> **Note:** Some browser/OS shortcuts (e.g. `Ctrl+W`, `Alt+F4`) are intercepted before reaching the web UI. Use the serial terminal for those combinations.
+
 __Important:__ The settings are not saved automatically, you need to execute __Store new settings on the device__!
 
 ### Currently implemented settings
@@ -105,8 +113,8 @@ __Important:__ The settings are not saved automatically, you need to execute __S
 | Inactivity time [ms]                        | i                          | Integer, 30000-600000 [ms] (30s - 10min)             | Time before the BleenyButton enters the power-down mode. Will be reset by pressing the button or an established BLE connection |
 | Connected device                            | d                          | Info                                                 | This information heavily depends on the BLE stack of the host device, it is not always available, even if a device is connected! |
 | Reset paired devices                        | r                          | Action                                               | Reset the BLE pairings                                       |
-| Key 1                                       | 1                          | Selection: Space, Enter, 1, 2, Tab, F1, F2, F13, F14 | Select the keyboard key to be send when pressing the main button |
-| Key 2                                       | 2                          | Selection: Space, Enter, 1, 2, Tab, F1, F2, F13, F14 | If a second button is connected, this key will be sent.      |
+| Key 1                                       | 1                          | Key combination (any key + optional modifiers Ctrl/Shift/Alt/GUI) | Select the keyboard key or key combination to send when pressing the main button. Use the web UI to auto-detect by pressing the desired key. |
+| Key 2                                       | 2                          | Key combination (any key + optional modifiers Ctrl/Shift/Alt/GUI) | If a second button is connected, this key combination will be sent. |
 | Print out supported commands and build date | ?                          | Action                                               | Print out possible commands                                  |
 
 The following commands are available when building with output enabled:
@@ -117,7 +125,7 @@ The following commands are available when building with output enabled:
 | Output mode               | o                          | Selection: click, toggle        | Either click the output for 0.1s or toggle when the button is pressed (or command "Trigger output" is sent) |
 | Mode 1 - Tremor timeout   | t                          | Integer, 300-5000 [ms] (0.3-5s) | Defines the delay before another output trigger can happen, used in Mode 1 |
 | Mode 3 - Auto click delay | p                          | Integer, 2-600 [s]              | After the output is triggered, this time will pass until the output is triggered again. |
-| Startup Mode              | m                          | Integer, 1-3                    | Select the output mode on startup. The mode can be changed with the second button on the bottom (PIN_MODE) |
+| Startup Mode              | m                          | Integer, 1-4                    | Select the output mode on startup. The mode can be changed with the second button on the bottom (PIN_MODE) |
 
 ### Output mode description
 
@@ -132,6 +140,10 @@ Button presses are directly mapped to the output. Note: each edge (press / relea
 #### Mode 3 - auto click
 
 A button press triggers the output. Afterwards, the button is locked for a given timeout, then another automatic trigger of the output happens.
+
+#### Mode 4 - disabled
+
+The relay output is fully disabled. Button presses only send the configured BLE key — no relay switching occurs.
 
  # Acknowledgement
 
